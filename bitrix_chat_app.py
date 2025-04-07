@@ -14,13 +14,13 @@ def get_chat_list():
     r = requests.get(WEBHOOK + "im.recent.get").json()
     return r.get("result", [])
 
-# === Получение истории сообщений через im.message.getHistory ===
-def get_chat_history(chat_id, limit=1000):
+# === Получение сообщений через im.dialog.messages.get ===
+def get_chat_history(dialog_id, limit=2000):
     messages = []
     offset = 0
     while True:
-        r = requests.get(WEBHOOK + "im.message.getHistory", params={
-            "CHAT_ID": chat_id,
+        r = requests.get(WEBHOOK + "im.dialog.messages.get", params={
+            "DIALOG_ID": dialog_id,
             "LIMIT": 200,
             "OFFSET": offset
         }).json()
@@ -33,11 +33,12 @@ def get_chat_history(chat_id, limit=1000):
         offset += 200
     return messages
 
-# === Экспорт в файл (без фильтрации по дате) ===
+# === Экспорт в файл ===
 def export_chat(chat, debug=False):
     chat_id = chat.get("chat_id") or chat.get("id")
+    dialog_id = f"chat{chat_id}" if chat.get("type") == "chat" else str(chat_id)
     name = chat.get("title", f"chat_{chat_id}")
-    messages = get_chat_history(chat_id)
+    messages = get_chat_history(dialog_id)
 
     if debug:
         st.subheader("Отладочная информация (первые 2 сообщения):")
@@ -52,10 +53,10 @@ def export_chat(chat, debug=False):
 
     for msg in messages:
         exported["messages"].append({
-            "id": msg.get("id"),
-            "timestamp": msg.get("date"),
-            "author_id": msg.get("author_id"),
-            "text": msg.get("text")
+            "id": msg.get("ID"),
+            "timestamp": msg.get("DATE_CREATE"),
+            "author_id": msg.get("AUTHOR_ID"),
+            "text": msg.get("MESSAGE")
         })
 
     filename = f"{OUTPUT_FOLDER}/chat_{chat_id}_full.json"
