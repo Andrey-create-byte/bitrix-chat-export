@@ -1,8 +1,8 @@
 import streamlit as st
 import requests
 import json
-import io
 from datetime import datetime
+import io
 
 WEBHOOK = st.secrets["WEBHOOK"]
 
@@ -32,7 +32,7 @@ def get_chat_history(chat_id, limit=50):
         if not messages:
             break
 
-        new_messages = [msg for msg in messages if msg["id"] not in seen_ids]
+        new_messages = [msg for msg in messages if isinstance(msg, dict) and msg["id"] not in seen_ids]
         if not new_messages:
             break
 
@@ -41,11 +41,6 @@ def get_chat_history(chat_id, limit=50):
         last_id = min(msg["id"] for msg in new_messages)
 
     return all_messages
-
-def extract_participants(chat):
-    if chat.get("type") == "chat":
-        return [user["name"] for user in chat.get("users", [])]
-    return []
 
 def export_chat(chat_id, chat_name, messages):
     export = {
@@ -56,12 +51,20 @@ def export_chat(chat_id, chat_name, messages):
         "messages": []
     }
     for msg in messages:
+        if isinstance(msg, dict):
+            params = msg.get("params", {})
+            is_file = isinstance(params, dict) and params.get("FILES")
+        else:
+            is_file = False
+
+        msg_type = "file" if is_file else "text"
+
         export["messages"].append({
-            "id": msg["id"],
-            "timestamp": msg["date"],
-            "author": msg["author_id"],
-            "text": msg.get("text", ""),
-            "type": "file" if msg.get("params", {}).get("FILES") else "text",
+            "id": msg.get("id"),
+            "timestamp": msg.get("date"),
+            "author": msg.get("author_id"),
+            "text": msg.get("text"),
+            "type": msg_type,
             "attachments": []
         })
     return export
@@ -88,15 +91,8 @@ if selected_chat_title:
         st.json(all_messages[:2])
 
         export_data = export_chat(selected_chat_id, selected_chat_title, all_messages)
+        buffer = io.BytesIO()
+        buffer.write(json.dumps(export_data, ensure_ascii=False, indent=2).encode("utf-8"))
+        buffer.seek(0)
 
-        # Сохраняем JSON в памяти
-        json_data = json.dumps(export_data, ensure_ascii=False, indent=2)
-        buffer = io.BytesIO(json_data.encode("utf-8"))
-
-        # Кнопка для скачивания
-        st.download_button(
-            label="Скачать JSON",
-            data=buffer,
-            file_name="exported_chat.json",
-            mime="application/json"
-        )
+        st.download_button("Скачать JSON", buffer, file_name="exported_chat.json", mime="application/json")
