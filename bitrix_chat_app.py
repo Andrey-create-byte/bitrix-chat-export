@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import json
-from datetime import datetime
+from datetime import datetime, date
 import io
 
 WEBHOOK = st.secrets["WEBHOOK"]
@@ -42,7 +42,7 @@ def get_chat_history(chat_id, limit=50):
 
     return all_messages
 
-def export_chat(chat_id, chat_name, messages):
+def export_chat(chat_id, chat_name, messages, date_from=None, date_to=None):
     export = {
         "chat_id": chat_id,
         "chat_name": chat_name,
@@ -51,12 +51,24 @@ def export_chat(chat_id, chat_name, messages):
         "messages": []
     }
     for msg in messages:
-        if isinstance(msg, dict):
-            params = msg.get("params", {})
-            is_file = isinstance(params, dict) and params.get("FILES")
-        else:
-            is_file = False
+        if not isinstance(msg, dict):
+            continue
 
+        msg_date_str = msg.get("date")
+        if not msg_date_str:
+            continue
+        try:
+            msg_date = datetime.strptime(msg_date_str[:19], "%Y-%m-%dT%H:%M:%S")
+        except:
+            continue
+
+        if date_from and msg_date < date_from:
+            continue
+        if date_to and msg_date > date_to:
+            continue
+
+        params = msg.get("params", {})
+        is_file = isinstance(params, dict) and params.get("FILES")
         msg_type = "file" if is_file else "text"
 
         export["messages"].append({
@@ -78,10 +90,17 @@ group_chats = [chat for chat in chats if chat["type"] == "chat"]
 chat_map = {f'{chat["title"]} (ID: {chat["chat_id"]})': chat["chat_id"] for chat in group_chats}
 selected_chat_title = st.selectbox("Выберите чат:", list(chat_map.keys()))
 
+# Фильтр по дате
+st.subheader("Фильтр по дате")
+def_date_from = date(2024, 1, 1)
+def_date_to = date.today()
+date_from = st.date_input("С какой даты", def_date_from)
+date_to = st.date_input("По какую дату", def_date_to)
+
 if selected_chat_title:
     selected_chat_id = chat_map[selected_chat_title]
 
-    if st.button("Выгрузить все сообщения"):
+    if st.button("Выгрузить сообщения"):
         st.info("Загружаем сообщения...")
         all_messages = get_chat_history(selected_chat_id)
         st.success(f"Загрузка завершена. Всего сообщений: {len(all_messages)}")
@@ -90,7 +109,10 @@ if selected_chat_title:
         st.subheader("Отладочная информация (первые 2 сообщения):")
         st.json(all_messages[:2])
 
-        export_data = export_chat(selected_chat_id, selected_chat_title, all_messages)
+        dt_from = datetime.combine(date_from, datetime.min.time())
+        dt_to = datetime.combine(date_to, datetime.max.time())
+        export_data = export_chat(selected_chat_id, selected_chat_title, all_messages, dt_from, dt_to)
+
         buffer = io.BytesIO()
         buffer.write(json.dumps(export_data, ensure_ascii=False, indent=2).encode("utf-8"))
         buffer.seek(0)
