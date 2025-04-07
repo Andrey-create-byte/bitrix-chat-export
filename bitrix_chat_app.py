@@ -51,8 +51,8 @@ def export_chat(chat, debug=False):
     ]
 
     if debug:
-        st.subheader("Отладочная информация (первые 2 сообщения):")
-        st.write(filtered[:2])
+        st.subheader("Отладочная информация (первые 100 сообщений):")
+        st.write(filtered[:100])
 
     exported = {
         "chat_id": chat_id,
