@@ -13,33 +13,54 @@ def get_chat_list():
     r = requests.get(WEBHOOK + "im.recent.get").json()
     return r.get("result", [])
 
-# === Получение сообщений из диалога ===
-def get_chat_history(dialog_id, limit=2000):
+# === Получение сообщений с логами и сырым экспортом ===
+def get_chat_history(dialog_id, limit=2000, raw_filename=None):
     messages = []
     offset = 0
+    total_loaded = 0
+
+    st.info("Загружаем сообщения...")
+
     while True:
         r = requests.get(WEBHOOK + "im.dialog.messages.get", params={
             "DIALOG_ID": dialog_id,
             "LIMIT": 200,
             "OFFSET": offset
         }).json()
+
         batch = r.get("result", {}).get("messages", [])
-        if not batch:
+        batch_count = len(batch)
+
+        if batch_count == 0:
+            st.warning(f"Остановлено: получено 0 сообщений на смещении {offset}")
             break
+
         messages.extend(batch)
-        if len(batch) < 200 or len(messages) >= limit:
+        total_loaded += batch_count
+        st.write(f"Загружено {batch_count} сообщений (offset = {offset})")
+
+        if batch_count < 200 or total_loaded >= limit:
+            st.success(f"Загрузка завершена. Всего сообщений: {total_loaded}")
             break
+
         offset += 200
+
+    if raw_filename:
+        raw_path = os.path.join(OUTPUT_FOLDER, raw_filename)
+        with open(raw_path, "w", encoding="utf-8") as f:
+            json.dump(messages, f, ensure_ascii=False, indent=2)
+        st.info(f"Сырые данные сохранены: {raw_path}")
+
     return messages
 
-# === Экспорт в JSON файл ===
+# === Экспорт в JSON-файл ===
 def export_chat(chat, debug=False):
     chat_id = chat.get("chat_id") or chat.get("id")
     dialog_id = f"chat{chat_id}" if chat.get("type") == "chat" else str(chat_id)
     name = chat.get("title", f"chat_{chat_id}")
-    messages = get_chat_history(dialog_id)
 
-    # Отфильтровать только валидные сообщения
+    messages = get_chat_history(dialog_id, raw_filename=f"chat_{chat_id}_raw.json")
+
     filtered = [
         {
             "id": msg.get("id"),
@@ -92,4 +113,3 @@ if st.button("Выгрузить все сообщения"):
         file_path = export_chat(selected_chat, debug=debug_mode)
         with open(file_path, "rb") as f:
             st.download_button("Скачать JSON", f, file_name=os.path.basename(file_path))
-            
