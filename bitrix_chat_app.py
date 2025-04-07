@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import json
-from datetime import datetime
 import os
 
 # === Секреты ===
@@ -14,7 +13,7 @@ def get_chat_list():
     r = requests.get(WEBHOOK + "im.recent.get").json()
     return r.get("result", [])
 
-# === Получение сообщений через im.dialog.messages.get ===
+# === Получение сообщений из диалога ===
 def get_chat_history(dialog_id, limit=2000):
     messages = []
     offset = 0
@@ -33,23 +32,22 @@ def get_chat_history(dialog_id, limit=2000):
         offset += 200
     return messages
 
-# === Экспорт в файл ===
+# === Экспорт в JSON файл ===
 def export_chat(chat, debug=False):
     chat_id = chat.get("chat_id") or chat.get("id")
     dialog_id = f"chat{chat_id}" if chat.get("type") == "chat" else str(chat_id)
     name = chat.get("title", f"chat_{chat_id}")
     messages = get_chat_history(dialog_id)
 
-    # Фильтрация пустых сообщений
+    # Отфильтровать только валидные сообщения
     filtered = [
         {
-            "id": msg.get("ID"),
-            "timestamp": msg.get("DATE_CREATE"),
-            "author_id": msg.get("AUTHOR_ID"),
-            "text": msg.get("MESSAGE")
+            "id": msg.get("id"),
+            "timestamp": msg.get("date"),
+            "author_id": msg.get("author_id"),
+            "text": msg.get("text")
         }
-        for msg in messages
-        if msg.get("ID") and msg.get("MESSAGE")
+        for msg in messages if msg.get("text")
     ]
 
     if debug:
@@ -68,7 +66,7 @@ def export_chat(chat, debug=False):
         json.dump(exported, f, ensure_ascii=False, indent=2)
     return filename
 
-# === Streamlit UI ===
+# === Интерфейс Streamlit ===
 st.set_page_config(page_title="Bitrix24 Chat Exporter")
 st.title("Экспорт чатов из Bitrix24")
 
