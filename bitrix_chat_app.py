@@ -1,53 +1,98 @@
 import streamlit as st
-import json
-import os
-from datetime import datetime
-from utils import get_chat_history, get_chat_list, save_raw_json
+import requests
+import datetime
+import time
 
+WEBHOOK = "ВАШ_WEBHOOK_BITRIX24"
+
+# Получение списка групповых чатов и открытых линий
+def get_chats():
+    res = requests.post(f'{WEBHOOK}/im.recent.get').json()
+    chats = []
+    for item in res.get('result', []):
+        if item['type'] in ['chat', 'lines']:
+            chats.append({
+                'id': item['chat_id'],
+                'name': item['title'],
+                'type': 'open_line' if item['type'] == 'lines' else 'group_chat'
+            })
+    return chats
+
+# Получение участников чата
+def get_participants(chat_id):
+    res = requests.post(f'{WEBHOOK}/im.chat.user.list', json={'CHAT_ID': chat_id}).json()
+    participants = []
+    for user_id in res.get('result', []):
+        user_res = requests.post(f'{WEBHOOK}/user.get', json={'ID': user_id}).json()
+        user = user_res.get('result', [{}])[0]
+        participants.append(f"{user.get('NAME', '')} {user.get('LAST_NAME', '')}")
+    return participants
+
+# Выгрузка сообщений, включая архивные
+def get_chat_history(chat_id, date_from, date_to):
+    messages, offset = [], 0
+    while True:
+        res = requests.post(f'{WEBHOOK}/im.dialog.messages.get', json={
+            'DIALOG_ID': f'chat{chat_id}',
+            'LIMIT': 50,
+            'OFFSET': offset
+        }).json()
+        batch = res.get('result', {}).get('messages', [])
+        if not batch:
+            break
+        for msg in batch:
+            ts = datetime.datetime.fromisoformat(msg['date'])
+            if date_from <= ts <= date_to:
+                messages.append({
+                    'id': msg['id'],
+                    'timestamp': msg['date'],
+                    'author': msg['author_id'],
+                    'text': msg['text'],
+                    'type': 'file' if 'files' in msg else 'text',
+                    'attachments': [
+                        {
+                            'filename': f['name'],
+                            'type': f['type'],
+                            'size': f['size'],
+                            'url': f['urlDownload']
+                        } for f in msg.get('files', [])
+                    ]
+                })
+        offset += 50
+        time.sleep(0.1)
+    return messages
+
+# Streamlit UI
 st.title("Экспорт чатов из Bitrix24")
 
-# Выбор чата
-chat_list = get_chat_list()
-chat_options = {f"{chat['title']} (ID: {chat['chat_id']})": chat["chat_id"] for chat in chat_list}
-selected_chat_name = st.selectbox("Выберите чат:", list(chat_options.keys()))
-selected_chat_id = chat_options[selected_chat_name]
+chats = get_chats()
+chat_option = st.selectbox("Выберите чат или открытую линию:", [f"{c['name']} (ID: {c['id']})" for c in chats])
+chat_id = int(chat_option.split("ID: ")[1].rstrip(")"))
 
-# Фильтр по дате
-st.markdown("**Фильтрация по дате:**")
-date_from = st.date_input("С какой даты", value=datetime.today())
-date_to = st.date_input("По какую дату", value=datetime.today())
+date_from = st.date_input("С даты", datetime.date.today() - datetime.timedelta(days=7))
+date_to = st.date_input("По дату", datetime.date.today())
 
-show_debug = st.checkbox("Показать отладочную информацию", value=True)
+if st.button("Выгрузить"):
+    selected_chat = next(c for c in chats if c['id'] == chat_id)
+    participants = get_participants(chat_id)
+    messages = get_chat_history(
+        chat_id,
+        datetime.datetime.combine(date_from, datetime.time.min),
+        datetime.datetime.combine(date_to, datetime.time.max)
+    )
 
-if st.button("Выгрузить сообщения"):
-    st.info("Загружаем сообщения...")
-    all_messages = []
-    offset = 0
-    limit = 51
+    export_data = {
+        'chat_id': chat_id,
+        'chat_name': selected_chat['name'],
+        'type': selected_chat['type'],
+        'participants': participants,
+        'messages': messages
+    }
 
-    while True:
-        messages = get_chat_history(selected_chat_id, offset=offset, limit=limit)
-        if not messages:
-            break
-        all_messages.extend(messages)
-        st.write(f"Загружено {len(messages)} сообщений (offset = {offset})")
-        if len(messages) < limit:
-            break
-        offset += limit
-
-    # Фильтрация по дате
-    filtered = []
-    for msg in all_messages:
-        ts = datetime.strptime(msg["date"], "%Y-%m-%dT%H:%M:%S%z")
-        if not (date_from <= ts.date() <= date_to):
-            continue
-        filtered.append(msg)
-
-    st.success(f"Загрузка завершена. Всего сообщений: {len(filtered)}")
-
-    raw_path = save_raw_json(filtered, selected_chat_id)
-    st.info(f"Сырые данные сохранены: {raw_path}")
-
-    if show_debug:
-        st.subheader("Отладочная информация (первые 100 сообщений):")
-        st.json(filtered[:100])
+    st.download_button(
+        "Скачать JSON",
+        data=requests.utils.json.dumps(export_data, ensure_ascii=False, indent=2),
+        file_name=f"chat_{chat_id}_{date_from}_{date_to}.json",
+        mime="application/json"
+    )
+    
