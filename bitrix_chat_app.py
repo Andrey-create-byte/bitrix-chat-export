@@ -1,16 +1,15 @@
 import streamlit as st
 import requests
 import json
+import io
 from datetime import datetime
 
 WEBHOOK = st.secrets["WEBHOOK"]
-
 
 def get_recent_chats():
     url = f"{WEBHOOK}/im.recent.get"
     response = requests.get(url)
     return response.json().get("result", [])
-
 
 def get_chat_history(chat_id, limit=50):
     all_messages = []
@@ -43,12 +42,10 @@ def get_chat_history(chat_id, limit=50):
 
     return all_messages
 
-
 def extract_participants(chat):
     if chat.get("type") == "chat":
         return [user["name"] for user in chat.get("users", [])]
     return []
-
 
 def export_chat(chat_id, chat_name, messages):
     export = {
@@ -68,7 +65,6 @@ def export_chat(chat_id, chat_name, messages):
             "attachments": []
         })
     return export
-
 
 st.title("Экспорт чатов из Bitrix24")
 
@@ -93,21 +89,14 @@ if selected_chat_title:
 
         export_data = export_chat(selected_chat_id, selected_chat_title, all_messages)
 
-        # Сохраняем во временный файл
-        with open("exported_chat.json", "w", encoding="utf-8") as f:
-            json.dump(export_data, f, ensure_ascii=False, indent=2)
+        # Сохраняем JSON в памяти
+        json_data = json.dumps(export_data, ensure_ascii=False, indent=2)
+        buffer = io.BytesIO(json_data.encode("utf-8"))
 
-        import io
-
-# сериализация JSON в память
-json_data = json.dumps(export_data, ensure_ascii=False, indent=2)
-buffer = io.BytesIO(json_data.encode("utf-8"))
-
-# кнопка для скачивания
-st.download_button(
-    label="Скачать JSON",
-    data=buffer,
-    file_name="exported_chat.json",
-    mime="application/json"
-)
-            
+        # Кнопка для скачивания
+        st.download_button(
+            label="Скачать JSON",
+            data=buffer,
+            file_name="exported_chat.json",
+            mime="application/json"
+        )
