@@ -14,7 +14,7 @@ def get_chat_list():
     result = []
     start = 0
     while True:
-        r = requests.get(WEBHOOK + "im.chat.list", params={"FILTER": {"TYPE": "chat"}, "START": start}).json()
+        r = requests.get(WEBHOOK + "im.chat.list", params={"START": start}).json()
         result += r.get("result", [])
         if "next" in r:
             start = r["next"]
@@ -92,7 +92,7 @@ st.title("Экспорт чатов из Bitrix24")
 with st.spinner("Загружаем список чатов..."):
     group_chats = get_chat_list()
     openline_ids = get_openline_dialogs()
-    filtered_chats = [chat for chat in group_chats if int(chat["ID"]) in openline_ids or chat["TYPE"] == "chat"]
+    filtered_chats = [chat for chat in group_chats if int(chat["ID"]) in openline_ids or chat.get("TYPE") in ("chat", "open", "call")]
 
 # === Защита от пустого списка ===
 if not filtered_chats:
