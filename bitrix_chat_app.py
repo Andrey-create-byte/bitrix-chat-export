@@ -9,119 +9,87 @@ WEBHOOK = st.secrets["WEBHOOK"]
 OUTPUT_FOLDER = "bitrix_chat_exports"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# === ФУНКЦИИ ===
-def get_chat_list():
-    result = []
+# === Получение списка чатов из im.recent.get ===
+def get_recent_chats():
     r = requests.get(WEBHOOK + "im.recent.get").json()
+    chats = []
     for item in r.get("result", []):
-        chat = item.get("CHAT")
-        if chat and chat.get("type") in (
-            "chat", "open", "call", "sonetGroup", "calendar", "tasks"
-        ):
-            result.append({
-                "ID": chat["id"],
-                "NAME": chat.get("name", "Без имени"),
-                "TYPE": chat.get("type"),
-                "USER_IDS": chat.get("user_ids", []),
+        if item.get("type") in ("chat", "open", "call", "sonetGroup", "calendar", "tasks"):
+            chats.append({
+                "title": item.get("title", "Без имени"),
+                "chat_id": item.get("chat_id"),
+                "type": item.get("type"),
             })
-    return result
+    return chats
 
-def get_openline_dialogs():
-    result = set()
-    r = requests.get(WEBHOOK + "imopenlines.session.list", params={"LIMIT": 100}).json()
-    for session in r.get("result", []):
-        result.add(session["CHAT_ID"])
-    return list(result)
-
+# === История сообщений ===
 def get_chat_history(chat_id, limit=200):
     messages = []
-    start = 0
+    offset = 0
     while True:
         r = requests.get(WEBHOOK + "im.dialog.messages.get", params={
             "DIALOG_ID": f"chat{chat_id}",
             "LIMIT": limit,
-            "OFFSET": start
+            "OFFSET": offset
         }).json()
         batch = r.get("result", {}).get("messages", [])
         messages += batch
         if len(batch) < limit:
             break
-        start += limit
+        offset += limit
     return messages
 
+# === Экспорт в файл ===
 def export_chat(chat, date_from, date_to):
-    chat_id = chat["ID"]
-    name = chat.get("NAME", f"chat_{chat_id}")
-    messages = get_chat_history(chat_id)
-    participants = chat.get("USER_IDS", [])
-    exported = {
-        "chat_id": chat_id,
-        "chat_name": name,
-        "type": chat.get("TYPE", "chat"),
-        "participants": participants,
-        "messages": []
-    }
+    messages = get_chat_history(chat["chat_id"])
+    filtered = []
 
     for msg in messages:
-        msg_time = datetime.strptime(msg["DATE_CREATE"], "%Y-%m-%dT%H:%M:%S%z")
-        if not (date_from <= msg_time <= date_to):
+        ts = datetime.strptime(msg["DATE_CREATE"], "%Y-%m-%dT%H:%M:%S%z")
+        if not (date_from <= ts <= date_to):
             continue
-
-        attachments = []
-        if "ATTACH" in msg:
-            for block in msg["ATTACH"].get("BLOCKS", []):
-                if block.get("TYPE") == "FILE":
-                    attachments.append({
-                        "filename": block["NAME"],
-                        "url": block["LINK"]
-                    })
-        exported["messages"].append({
+        filtered.append({
             "id": msg["ID"],
-            "timestamp": msg["DATE_CREATE"],
             "author_id": msg["AUTHOR_ID"],
-            "text": msg["MESSAGE"],
-            "type": "text" if not attachments else "file",
-            "attachments": attachments
+            "timestamp": msg["DATE_CREATE"],
+            "text": msg["MESSAGE"]
         })
 
-    filename = f"{OUTPUT_FOLDER}/chat_{chat_id}_{date_from.date()}_{date_to.date()}.json"
+    output = {
+        "chat_id": chat["chat_id"],
+        "title": chat["title"],
+        "type": chat["type"],
+        "messages": filtered
+    }
+
+    filename = f"{OUTPUT_FOLDER}/chat_{chat['chat_id']}_{date_from.date()}_{date_to.date()}.json"
     with open(filename, "w", encoding="utf-8") as f:
-        json.dump(exported, f, ensure_ascii=False, indent=2)
+        json.dump(output, f, ensure_ascii=False, indent=2)
     return filename
 
-# === STREAMLIT UI ===
+# === Streamlit UI ===
 st.set_page_config(page_title="Bitrix24 Chat Exporter")
 st.title("Экспорт чатов из Bitrix24")
 
 with st.spinner("Загружаем список чатов..."):
-    group_chats = get_chat_list()
-    openline_ids = get_openline_dialogs()
-    filtered_chats = [
-        chat for chat in group_chats
-        if int(chat["ID"]) in openline_ids or chat.get("TYPE") in (
-            "chat", "open", "call", "sonetGroup", "calendar", "tasks"
-        )
-    ]
+    chats = get_recent_chats()
 
-if not filtered_chats:
-    st.error("Список чатов пуст. Убедитесь, что вебхук активен и у пользователя есть доступ к групповым чатам или открытым линиям.")
+if not chats:
+    st.warning("Нет доступных чатов.")
     st.stop()
-else:
-    chat_options = {
-        f"{chat.get('NAME', 'Без имени')} (ID: {chat['ID']})": chat
-        for chat in filtered_chats
-    }
-    selected_chat_name = st.selectbox("Выберите чат или открытую линию:", list(chat_options.keys()))
-    selected_chat = chat_options[selected_chat_name]
 
-    date_from = st.date_input("Дата С")
-    date_to = st.date_input("Дата ПО")
+chat_options = {f"{chat['title']} (ID: {chat['chat_id']})": chat for chat in chats}
+selected_chat_name = st.selectbox("Выберите чат:", list(chat_options.keys()))
+selected_chat = chat_options[selected_chat_name]
 
-    if st.button("Выгрузить чат"):
-        with st.spinner("Экспортируем сообщения..."):
-            dt_from = datetime.combine(date_from, datetime.min.time()).astimezone()
-            dt_to = datetime.combine(date_to, datetime.max.time()).astimezone()
-            filepath = export_chat(selected_chat, dt_from, dt_to)
-            with open(filepath, "rb") as f:
-                st.download_button("Скачать JSON", f, file_name=os.path.basename(filepath))
-                
+date_from = st.date_input("С какой даты")
+date_to = st.date_input("По какую дату")
+
+if st.button("Выгрузить"):
+    with st.spinner("Экспортируем..."):
+        dt_from = datetime.combine(date_from, datetime.min.time()).astimezone()
+        dt_to = datetime.combine(date_to, datetime.max.time()).astimezone()
+        file_path = export_chat(selected_chat, dt_from, dt_to)
+        with open(file_path, "rb") as f:
+            st.download_button("Скачать JSON", f, file_name=os.path.basename(file_path))
+            
