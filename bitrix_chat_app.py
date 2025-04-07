@@ -15,7 +15,9 @@ def get_chat_list():
     r = requests.get(WEBHOOK + "im.recent.get").json()
     for item in r.get("result", []):
         chat = item.get("CHAT")
-        if chat and chat.get("TYPE") in ("chat", "open", "call"):
+        if chat and chat.get("TYPE") in (
+            "chat", "open", "call", "sonetGroup", "calendar", "tasks"
+        ):
             result.append(chat)
     return result
 
@@ -89,13 +91,21 @@ st.title("Экспорт чатов из Bitrix24")
 with st.spinner("Загружаем список чатов..."):
     group_chats = get_chat_list()
     openline_ids = get_openline_dialogs()
-    filtered_chats = [chat for chat in group_chats if int(chat["ID"]) in openline_ids or chat.get("TYPE") in ("chat", "open", "call")]
+    filtered_chats = [
+        chat for chat in group_chats
+        if int(chat["ID"]) in openline_ids or chat.get("TYPE") in (
+            "chat", "open", "call", "sonetGroup", "calendar", "tasks"
+        )
+    ]
 
 if not filtered_chats:
     st.error("Список чатов пуст. Убедитесь, что вебхук активен и у пользователя есть доступ к групповым чатам или открытым линиям.")
     st.stop()
 else:
-    chat_options = {f"{chat.get('NAME', 'Без имени')} (ID: {chat['ID']})": chat for chat in filtered_chats}
+    chat_options = {
+        f"{chat.get('NAME', 'Без имени')} (ID: {chat['ID']})": chat
+        for chat in filtered_chats
+    }
     selected_chat_name = st.selectbox("Выберите чат или открытую линию:", list(chat_options.keys()))
     selected_chat = chat_options[selected_chat_name]
 
