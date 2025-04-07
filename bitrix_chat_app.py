@@ -15,7 +15,7 @@ def get_recent_chats():
 def get_chat_history(chat_id, limit=50):
     offset = 0
     all_messages = []
-    previous_count = -1
+    seen_ids = set()
 
     while True:
         url = f"{WEBHOOK}/im.dialog.messages.get"
@@ -30,12 +30,13 @@ def get_chat_history(chat_id, limit=50):
         if not messages:
             break
 
-        all_messages.extend(messages)
-        offset += limit
-
-        if len(all_messages) == previous_count:
+        new_messages = [msg for msg in messages if msg["id"] not in seen_ids]
+        if not new_messages:
             break
-        previous_count = len(all_messages)
+
+        all_messages.extend(new_messages)
+        seen_ids.update(msg["id"] for msg in new_messages)
+        offset += limit
 
     return all_messages
 
@@ -93,4 +94,3 @@ if selected_chat_title:
 
         with open("exported_chat.json", "rb") as f:
             st.download_button("Скачать JSON", f, file_name="exported_chat.json", mime="application/json")
-            
