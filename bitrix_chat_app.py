@@ -94,22 +94,21 @@ with st.spinner("Загружаем список чатов..."):
     openline_ids = get_openline_dialogs()
     filtered_chats = [chat for chat in group_chats if int(chat["ID"]) in openline_ids or chat.get("TYPE") in ("chat", "open", "call")]
 
-# === Защита от пустого списка ===
 if not filtered_chats:
     st.error("Список чатов пуст. Убедитесь, что вебхук активен и у пользователя есть доступ к групповым чатам или открытым линиям.")
     st.stop()
+else:
+    chat_options = {f"{chat.get('NAME', 'Без имени')} (ID: {chat['ID']})": chat for chat in filtered_chats}
+    selected_chat_name = st.selectbox("Выберите чат или открытую линию:", list(chat_options.keys()))
+    selected_chat = chat_options[selected_chat_name]
 
-chat_options = {f"{chat.get('NAME', 'Без имени')} (ID: {chat['ID']})": chat for chat in filtered_chats}
-selected_chat_name = st.selectbox("Выберите чат или открытую линию:", list(chat_options.keys()))
-selected_chat = chat_options[selected_chat_name]
+    date_from = st.date_input("Дата С")
+    date_to = st.date_input("Дата ПО")
 
-date_from = st.date_input("Дата С")
-date_to = st.date_input("Дата ПО")
-
-if st.button("Выгрузить чат"):
-    with st.spinner("Экспортируем сообщения..."):
-        dt_from = datetime.combine(date_from, datetime.min.time()).astimezone()
-        dt_to = datetime.combine(date_to, datetime.max.time()).astimezone()
-        filepath = export_chat(selected_chat, dt_from, dt_to)
-        with open(filepath, "rb") as f:
-            st.download_button("Скачать JSON", f, file_name=os.path.basename(filepath))
+    if st.button("Выгрузить чат"):
+        with st.spinner("Экспортируем сообщения..."):
+            dt_from = datetime.combine(date_from, datetime.min.time()).astimezone()
+            dt_to = datetime.combine(date_to, datetime.max.time()).astimezone()
+            filepath = export_chat(selected_chat, dt_from, dt_to)
+            with open(filepath, "rb") as f:
+                st.download_button("Скачать JSON", f, file_name=os.path.basename(filepath))
