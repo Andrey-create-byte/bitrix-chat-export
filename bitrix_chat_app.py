@@ -15,10 +15,15 @@ def get_chat_list():
     r = requests.get(WEBHOOK + "im.recent.get").json()
     for item in r.get("result", []):
         chat = item.get("CHAT")
-        if chat and chat.get("TYPE") in (
+        if chat and chat.get("type") in (
             "chat", "open", "call", "sonetGroup", "calendar", "tasks"
         ):
-            result.append(chat)
+            result.append({
+                "ID": chat["id"],
+                "NAME": chat.get("name", "Без имени"),
+                "TYPE": chat.get("type"),
+                "USER_IDS": chat.get("user_ids", []),
+            })
     return result
 
 def get_openline_dialogs():
@@ -119,3 +124,4 @@ else:
             filepath = export_chat(selected_chat, dt_from, dt_to)
             with open(filepath, "rb") as f:
                 st.download_button("Скачать JSON", f, file_name=os.path.basename(filepath))
+                
