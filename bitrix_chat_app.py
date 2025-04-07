@@ -95,6 +95,12 @@ with st.spinner("Загружаем список чатов..."):
     filtered_chats = [chat for chat in group_chats if int(chat["ID"]) in openline_ids or chat["TYPE"] == "chat"]
 
 chat_options = {f"{chat.get('NAME', 'Без имени')} (ID: {chat['ID']})": chat for chat in filtered_chats}
+
+# === Защита от пустого списка ===
+if not chat_options:
+    st.error("Список чатов пуст. Убедитесь, что вебхук активен и у пользователя есть доступ к групповым чатам или открытым линиям.")
+    st.stop()
+
 selected_chat_name = st.selectbox("Выберите чат или открытую линию:", list(chat_options.keys()))
 selected_chat = chat_options[selected_chat_name]
 
