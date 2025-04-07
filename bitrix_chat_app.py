@@ -63,7 +63,7 @@ def export_chat(chat_id, chat_name, messages):
             "id": msg["id"],
             "timestamp": msg["date"],
             "author": msg["author_id"],
-            "text": msg["text"],
+            "text": msg.get("text", ""),
             "type": "file" if msg.get("params", {}).get("FILES") else "text",
             "attachments": []
         })
@@ -92,8 +92,11 @@ if selected_chat_title:
         st.json(all_messages[:2])
 
         export_data = export_chat(selected_chat_id, selected_chat_title, all_messages)
+
+        # Сохраняем во временный файл
         with open("exported_chat.json", "w", encoding="utf-8") as f:
             json.dump(export_data, f, ensure_ascii=False, indent=2)
 
         with open("exported_chat.json", "rb") as f:
             st.download_button("Скачать JSON", f, file_name="exported_chat.json", mime="application/json")
+            
