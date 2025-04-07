@@ -1,113 +1,74 @@
+import streamlit as st
 import requests
-import datetime
-import time
-import os
 import json
+from datetime import datetime
 
-# Webhook Bitrix24
-WEBHOOK = "ВАШ_WEBHOOK_BITRIX24"
+WEBHOOK = st.secrets["WEBHOOK"]
 
-# Папка для выгрузки
-EXPORT_DIR = "bitrix_chat_exports"
-os.makedirs(EXPORT_DIR, exist_ok=True)
-
-# Сохраняем JSON-файл
-def save_raw_json(data, filename):
-    filepath = os.path.join(EXPORT_DIR, filename)
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-# Получение всех чатов (групповых и открытых линий)
-def get_group_and_openline_chats():
+def get_recent_chats():
     url = f"{WEBHOOK}/im.recent.get"
     response = requests.get(url)
-    result = response.json().get("result", [])
-    chats = []
-    for item in result:
-        if item.get("type") == "chat" or item.get("chat", {}).get("entity_type").upper() == "LINES":
-            chats.append({
-                "id": item["chat_id"],
-                "name": item["title"],
-                "type": "open_line" if item.get("chat", {}).get("entity_type").upper() == "LINES" else "group_chat"
-            })
-    return chats
+    return response.json().get("result", [])
 
-# Получение пользователей по ID
-USER_CACHE = {}
-def get_user_name(user_id):
-    if user_id in USER_CACHE:
-        return USER_CACHE[user_id]
-    url = f"{WEBHOOK}/user.get?id={user_id}"
-    r = requests.get(url).json()
-    user = r.get("result", [{}])[0]
-    full_name = f"{user.get('name', '')} {user.get('last_name', '')}".strip()
-    USER_CACHE[user_id] = full_name
-    return full_name
+def get_chat_history(chat_id, limit=50, offset=0):
+    url = f"{WEBHOOK}/im.dialog.messages.get"
+    params = {
+        "DIALOG_ID": f"chat{chat_id}",
+        "LIMIT": limit,
+        "OFFSET": offset
+    }
+    response = requests.get(url, params=params)
+    return response.json().get("result", {}).get("messages", [])
 
-# Получение сообщений из чата
-def get_chat_messages(chat_id, date_from=None, date_to=None):
-    messages = []
-    offset = 0
-    batch_size = 50
-    while True:
-        url = f"{WEBHOOK}/im.dialog.messages.get"
-        params = {
-            "DIALOG_ID": f"chat{chat_id}",
-            "LIMIT": batch_size,
-            "OFFSET": offset,
-            "SORT": "ASC"
-        }
-        resp = requests.post(url, data=params).json()
-        batch = resp.get("result", {}).get("messages", [])
-        if not batch:
-            break
-        for msg in batch:
-            msg_date = datetime.datetime.fromisoformat(msg["date"].replace("+03:00", ""))
-            if date_from and msg_date < date_from:
-                continue
-            if date_to and msg_date > date_to:
-                continue
-            messages.append({
-                "id": msg["id"],
-                "timestamp": msg["date"],
-                "author": get_user_name(msg["author_id"]),
-                "text": msg.get("text", ""),
-                "type": "file" if msg.get("file") else "text",
-                "attachments": [{
-                    "filename": msg["file"]["name"],
-                    "type": msg["file"]["type"],
-                    "size": msg["file"]["size"],
-                    "url": msg["file"]["urlPreview"]
-                }] if msg.get("file") else []
-            })
-        offset += batch_size
-        time.sleep(0.3)
-    return messages
+def extract_participants(chat):
+    if chat.get("type") == "chat":
+        return [user["name"] for user in chat.get("users", [])]
+    return []
 
-# Экспорт выбранного чата
-def export_chat(chat_id, chat_name, chat_type, date_from=None, date_to=None):
-    print(f"Выгружаем: {chat_name} ({chat_type})")
-    messages = get_chat_messages(chat_id, date_from, date_to)
-    participants = list(set([m["author"] for m in messages]))
-    export_data = {
+def export_chat(chat_id, chat_name, messages):
+    export = {
         "chat_id": chat_id,
         "chat_name": chat_name,
-        "type": chat_type,
-        "participants": participants,
-        "messages": messages
+        "type": "group_chat",
+        "participants": [],
+        "messages": []
     }
-    save_raw_json(export_data, f"chat_{chat_id}_export.json")
-    print(f"Сохранено: chat_{chat_id}_export.json ({len(messages)} сообщений)")
+    for msg in messages:
+        export["messages"].append({
+            "id": msg["id"],
+            "timestamp": msg["date"],
+            "author": msg["author_id"],
+            "text": msg["text"],
+            "type": "text",
+            "attachments": []
+        })
+    return export
 
-# === Пример запуска ===
-if __name__ == "__main__":
-    chats = get_group_and_openline_chats()
-    for chat in chats:
-        export_chat(
-            chat_id=chat["id"],
-            chat_name=chat["name"],
-            chat_type=chat["type"],
-            date_from=datetime.datetime(2025, 4, 1),
-            date_to=datetime.datetime(2025, 4, 7)
-        )
-        
+st.title("Экспорт чатов из Bitrix24")
+
+# Получение списка чатов
+chats = get_recent_chats()
+group_chats = [chat for chat in chats if chat["type"] == "chat"]
+
+chat_map = {f'{chat["title"]} (ID: {chat["chat_id"]})': chat["chat_id"] for chat in group_chats}
+selected_chat_title = st.selectbox("Выберите чат:", list(chat_map.keys()))
+
+if selected_chat_title:
+    selected_chat_id = chat_map[selected_chat_title]
+
+    if st.button("Выгрузить все сообщения"):
+        st.info("Загружаем сообщения...")
+        all_messages = get_chat_history(selected_chat_id)
+        st.success(f"Загрузка завершена. Всего сообщений: {len(all_messages)}")
+
+        # Отладочная информация
+        st.subheader("Отладочная информация (первые 2 сообщения):")
+        st.json(all_messages[:2])
+
+        export_data = export_chat(selected_chat_id, selected_chat_title, all_messages)
+        with open("exported_chat.json", "w", encoding="utf-8") as f:
+            json.dump(export_data, f, ensure_ascii=False, indent=2)
+
+        with open("exported_chat.json", "rb") as f:
+            st.download_button("Скачать JSON", f, file_name="exported_chat.json", mime="application/json")
+            
