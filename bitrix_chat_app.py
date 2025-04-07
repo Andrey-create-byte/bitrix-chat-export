@@ -32,7 +32,7 @@ def get_chat_history(chat_id, limit=50):
         if not messages:
             break
 
-        new_messages = [msg for msg in messages if isinstance(msg, dict) and msg["id"] not in seen_ids]
+        new_messages = [msg for msg in messages if isinstance(msg, dict) and msg.get("id") not in seen_ids]
         if not new_messages:
             break
 
@@ -41,6 +41,11 @@ def get_chat_history(chat_id, limit=50):
         last_id = min(msg["id"] for msg in new_messages)
 
     return all_messages
+
+def extract_participants(chat):
+    if chat.get("type") == "chat":
+        return [user["name"] for user in chat.get("users", [])]
+    return []
 
 def export_chat(chat_id, chat_name, messages):
     export = {
@@ -51,12 +56,18 @@ def export_chat(chat_id, chat_name, messages):
         "messages": []
     }
     for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+
+        params = msg.get("params", {})
+        is_file = isinstance(params, dict) and params.get("FILES")
+
         export["messages"].append({
             "id": msg.get("id"),
-            "timestamp": msg.get("date") or msg.get("DATE_CREATE"),
+            "timestamp": msg.get("date"),
             "author": msg.get("author_id"),
             "text": msg.get("text"),
-            "type": "file" if msg.get("params", {}).get("FILES") else "text",
+            "type": "file" if is_file else "text",
             "attachments": []
         })
     return export
@@ -65,7 +76,7 @@ st.title("Экспорт чатов из Bitrix24")
 
 # Получение списка чатов
 chats = get_recent_chats()
-group_chats = [chat for chat in chats if chat["type"] == "chat"]
+group_chats = [chat for chat in chats if chat.get("type") == "chat"]
 
 chat_map = {f'{chat["title"]} (ID: {chat["chat_id"]})': chat["chat_id"] for chat in group_chats}
 selected_chat_title = st.selectbox("Выберите чат:", list(chat_map.keys()))
