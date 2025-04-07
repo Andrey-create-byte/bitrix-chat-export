@@ -13,19 +13,22 @@ def get_recent_chats():
 
 
 def get_chat_history(chat_id, limit=50):
-    offset = 0
     all_messages = []
     seen_ids = set()
+    last_id = 0
 
     while True:
-        url = f"{WEBHOOK}/im.dialog.messages.get"
         params = {
             "DIALOG_ID": f"chat{chat_id}",
-            "LIMIT": limit,
-            "OFFSET": offset
+            "LIMIT": limit
         }
+        if last_id:
+            params["LAST_ID"] = last_id
+
+        url = f"{WEBHOOK}/im.dialog.messages.get"
         response = requests.get(url, params=params)
-        messages = response.json().get("result", {}).get("messages", [])
+        result = response.json().get("result", {})
+        messages = result.get("messages", [])
 
         if not messages:
             break
@@ -36,7 +39,7 @@ def get_chat_history(chat_id, limit=50):
 
         all_messages.extend(new_messages)
         seen_ids.update(msg["id"] for msg in new_messages)
-        offset += limit
+        last_id = min(msg["id"] for msg in new_messages)
 
     return all_messages
 
@@ -94,3 +97,4 @@ if selected_chat_title:
 
         with open("exported_chat.json", "rb") as f:
             st.download_button("Скачать JSON", f, file_name="exported_chat.json", mime="application/json")
+            
