@@ -9,16 +9,17 @@ WEBHOOK = st.secrets["WEBHOOK"]
 OUTPUT_FOLDER = "bitrix_chat_exports"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# === Получение списка чатов из im.recent.get ===
+# === Получение списка чатов ===
 def get_recent_chats():
     r = requests.get(WEBHOOK + "im.recent.get").json()
     chats = []
     for item in r.get("result", []):
-        if item.get("type") in ("chat", "open", "call", "sonetGroup", "calendar", "tasks"):
+        chat_data = item.get("chat")
+        if chat_data and chat_data.get("type") in ("chat", "open", "call", "sonetGroup", "calendar", "tasks"):
             chats.append({
-                "title": item.get("title", "Без имени"),
-                "chat_id": item.get("chat_id"),
-                "type": item.get("type"),
+                "title": item.get("title") or chat_data.get("name", "Без имени"),
+                "chat_id": item.get("chat_id") or chat_data.get("id"),
+                "type": chat_data.get("type")
             })
     return chats
 
@@ -75,7 +76,7 @@ with st.spinner("Загружаем список чатов..."):
     chats = get_recent_chats()
 
 if not chats:
-    st.warning("Нет доступных чатов.")
+    st.warning("Список чатов пуст. Убедитесь, что у вас есть доступ к групповым чатам.")
     st.stop()
 
 chat_options = {f"{chat['title']} (ID: {chat['chat_id']})": chat for chat in chats}
