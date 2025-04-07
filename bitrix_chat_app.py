@@ -40,24 +40,28 @@ def export_chat(chat, debug=False):
     name = chat.get("title", f"chat_{chat_id}")
     messages = get_chat_history(dialog_id)
 
+    # Фильтрация пустых сообщений
+    filtered = [
+        {
+            "id": msg.get("ID"),
+            "timestamp": msg.get("DATE_CREATE"),
+            "author_id": msg.get("AUTHOR_ID"),
+            "text": msg.get("MESSAGE")
+        }
+        for msg in messages
+        if msg.get("ID") and msg.get("MESSAGE")
+    ]
+
     if debug:
         st.subheader("Отладочная информация (первые 2 сообщения):")
-        st.write(messages[:2])
+        st.write(filtered[:2])
 
     exported = {
         "chat_id": chat_id,
         "chat_name": name,
         "type": chat.get("type", "chat"),
-        "messages": []
+        "messages": filtered
     }
-
-    for msg in messages:
-        exported["messages"].append({
-            "id": msg.get("ID"),
-            "timestamp": msg.get("DATE_CREATE"),
-            "author_id": msg.get("AUTHOR_ID"),
-            "text": msg.get("MESSAGE")
-        })
 
     filename = f"{OUTPUT_FOLDER}/chat_{chat_id}_full.json"
     with open(filename, "w", encoding="utf-8") as f:
