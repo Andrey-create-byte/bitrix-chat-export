@@ -97,6 +97,17 @@ if selected_chat_title:
         with open("exported_chat.json", "w", encoding="utf-8") as f:
             json.dump(export_data, f, ensure_ascii=False, indent=2)
 
-        with open("exported_chat.json", "rb") as f:
-            st.download_button("Скачать JSON", f, file_name="exported_chat.json", mime="application/json")
+        import io
+
+# сериализация JSON в память
+json_data = json.dumps(export_data, ensure_ascii=False, indent=2)
+buffer = io.BytesIO(json_data.encode("utf-8"))
+
+# кнопка для скачивания
+st.download_button(
+    label="Скачать JSON",
+    data=buffer,
+    file_name="exported_chat.json",
+    mime="application/json"
+)
             
