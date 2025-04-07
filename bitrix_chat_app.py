@@ -3,6 +3,7 @@ import requests
 import json
 from datetime import datetime, date
 import io
+from dateutil.parser import parse
 
 WEBHOOK = st.secrets["WEBHOOK"]
 
@@ -58,7 +59,7 @@ def export_chat(chat_id, chat_name, messages, date_from=None, date_to=None):
         if not msg_date_str:
             continue
         try:
-            msg_date = datetime.strptime(msg_date_str[:19], "%Y-%m-%dT%H:%M:%S")
+            msg_date = parse(msg_date_str)
         except:
             continue
 
@@ -109,8 +110,8 @@ if selected_chat_title:
         st.subheader("Отладочная информация (первые 2 сообщения):")
         st.json(all_messages[:2])
 
-        dt_from = datetime.combine(date_from, datetime.min.time())
-        dt_to = datetime.combine(date_to, datetime.max.time())
+        dt_from = parse(datetime.combine(date_from, datetime.min.time()).isoformat())
+        dt_to = parse(datetime.combine(date_to, datetime.max.time()).isoformat())
         export_data = export_chat(selected_chat_id, selected_chat_title, all_messages, dt_from, dt_to)
 
         buffer = io.BytesIO()
@@ -118,3 +119,4 @@ if selected_chat_title:
         buffer.seek(0)
 
         st.download_button("Скачать JSON", buffer, file_name="exported_chat.json", mime="application/json")
+        
