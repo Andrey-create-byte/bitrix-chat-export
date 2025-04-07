@@ -12,14 +12,11 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 # === ФУНКЦИИ ===
 def get_chat_list():
     result = []
-    start = 0
-    while True:
-        r = requests.get(WEBHOOK + "im.chat.list", params={"START": start}).json()
-        result += r.get("result", [])
-        if "next" in r:
-            start = r["next"]
-        else:
-            break
+    r = requests.get(WEBHOOK + "im.recent.get").json()
+    for item in r.get("result", []):
+        chat = item.get("CHAT")
+        if chat and chat.get("TYPE") in ("chat", "open", "call"):
+            result.append(chat)
     return result
 
 def get_openline_dialogs():
