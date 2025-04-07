@@ -9,27 +9,17 @@ WEBHOOK = st.secrets["WEBHOOK"]
 OUTPUT_FOLDER = "bitrix_chat_exports"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# === Получение списка чатов ===
-def get_recent_chats():
+# === ФУНКЦИИ ===
+def get_chat_list():
     r = requests.get(WEBHOOK + "im.recent.get").json()
-    chats = []
-    for item in r.get("result", []):
-        chat_data = item.get("chat")
-        if chat_data and chat_data.get("type") in ("chat", "open", "call", "sonetGroup", "calendar", "tasks"):
-            chats.append({
-                "title": item.get("title") or chat_data.get("name", "Без имени"),
-                "chat_id": item.get("chat_id") or chat_data.get("id"),
-                "type": chat_data.get("type")
-            })
-    return chats
+    return r.get("result", [])
 
-# === История сообщений ===
-def get_chat_history(chat_id, limit=200):
+def get_chat_history(dialog_id, limit=200):
     messages = []
     offset = 0
     while True:
         r = requests.get(WEBHOOK + "im.dialog.messages.get", params={
-            "DIALOG_ID": f"chat{chat_id}",
+            "DIALOG_ID": dialog_id,
             "LIMIT": limit,
             "OFFSET": offset
         }).json()
@@ -40,51 +30,64 @@ def get_chat_history(chat_id, limit=200):
         offset += limit
     return messages
 
-# === Экспорт в файл ===
 def export_chat(chat, date_from, date_to):
-    messages = get_chat_history(chat["chat_id"])
-    filtered = []
-
-    for msg in messages:
-        ts = datetime.strptime(msg["DATE_CREATE"], "%Y-%m-%dT%H:%M:%S%z")
-        if not (date_from <= ts <= date_to):
-            continue
-        filtered.append({
-            "id": msg["ID"],
-            "author_id": msg["AUTHOR_ID"],
-            "timestamp": msg["DATE_CREATE"],
-            "text": msg["MESSAGE"]
-        })
-
-    output = {
-        "chat_id": chat["chat_id"],
-        "title": chat["title"],
-        "type": chat["type"],
-        "messages": filtered
+    raw_chat_id = chat["chat_id"]
+    dialog_id = raw_chat_id if str(raw_chat_id).startswith("chat") else f"chat{raw_chat_id}"
+    name = chat.get("title", f"chat_{raw_chat_id}")
+    messages = get_chat_history(dialog_id)
+    
+    exported = {
+        "chat_id": raw_chat_id,
+        "chat_name": name,
+        "type": chat.get("type", "chat"),
+        "participants": [],  # можно доработать
+        "messages": []
     }
 
-    filename = f"{OUTPUT_FOLDER}/chat_{chat['chat_id']}_{date_from.date()}_{date_to.date()}.json"
+    for msg in messages:
+        msg_time = datetime.strptime(msg["DATE_CREATE"], "%Y-%m-%dT%H:%M:%S%z")
+        if not (date_from <= msg_time <= date_to):
+            continue
+
+        attachments = []
+        if "ATTACH" in msg:
+            for block in msg["ATTACH"].get("BLOCKS", []):
+                if block.get("TYPE") == "FILE":
+                    attachments.append({
+                        "filename": block["NAME"],
+                        "url": block["LINK"]
+                    })
+        exported["messages"].append({
+            "id": msg["ID"],
+            "timestamp": msg["DATE_CREATE"],
+            "author_id": msg["AUTHOR_ID"],
+            "text": msg["MESSAGE"],
+            "type": "text" if not attachments else "file",
+            "attachments": attachments
+        })
+
+    filename = f"{OUTPUT_FOLDER}/chat_{raw_chat_id}_{date_from.date()}_{date_to.date()}.json"
     with open(filename, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
+        json.dump(exported, f, ensure_ascii=False, indent=2)
     return filename
 
-# === Streamlit UI ===
+# === UI ===
 st.set_page_config(page_title="Bitrix24 Chat Exporter")
 st.title("Экспорт чатов из Bitrix24")
 
 with st.spinner("Загружаем список чатов..."):
-    chats = get_recent_chats()
+    chats = get_chat_list()
 
 if not chats:
-    st.warning("Список чатов пуст. Убедитесь, что у вас есть доступ к групповым чатам.")
+    st.error("Список чатов пуст. Убедитесь, что вебхук активен и у пользователя есть доступ к чатам.")
     st.stop()
 
-chat_options = {f"{chat['title']} (ID: {chat['chat_id']})": chat for chat in chats}
-selected_chat_name = st.selectbox("Выберите чат:", list(chat_options.keys()))
-selected_chat = chat_options[selected_chat_name]
+chat_options = {f"{chat.get('title', 'Без названия')} (ID: {chat['chat_id']})": chat for chat in chats}
+selected_name = st.selectbox("Выберите чат:", list(chat_options.keys()))
+selected_chat = chat_options[selected_name]
 
-date_from = st.date_input("С какой даты")
-date_to = st.date_input("По какую дату")
+date_from = st.date_input("С какой даты", value=datetime.today())
+date_to = st.date_input("По какую дату", value=datetime.today())
 
 if st.button("Выгрузить"):
     with st.spinner("Экспортируем..."):
