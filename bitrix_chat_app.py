@@ -55,13 +55,16 @@ def export_chat(chat_id, chat_name, messages, date_from=None, date_to=None):
         if not isinstance(msg, dict):
             continue
 
-        msg_date_str = msg.get("date")
+        msg_date_str = msg.get("DATE_CREATE") or msg.get("date")
         if not msg_date_str:
             continue
         try:
             msg_date = parse(msg_date_str)
         except:
             continue
+
+        # Отладочный вывод
+        st.write("msg_date =", msg_date, "| from =", date_from, "| to =", date_to)
 
         if date_from and msg_date < date_from:
             continue
@@ -74,7 +77,7 @@ def export_chat(chat_id, chat_name, messages, date_from=None, date_to=None):
 
         export["messages"].append({
             "id": msg.get("id"),
-            "timestamp": msg.get("date"),
+            "timestamp": msg_date_str,
             "author": msg.get("author_id"),
             "text": msg.get("text"),
             "type": msg_type,
@@ -119,4 +122,3 @@ if selected_chat_title:
         buffer.seek(0)
 
         st.download_button("Скачать JSON", buffer, file_name="exported_chat.json", mime="application/json")
-        
