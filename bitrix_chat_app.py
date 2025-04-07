@@ -5,25 +5,46 @@ from datetime import datetime
 
 WEBHOOK = st.secrets["WEBHOOK"]
 
+
 def get_recent_chats():
     url = f"{WEBHOOK}/im.recent.get"
     response = requests.get(url)
     return response.json().get("result", [])
 
-def get_chat_history(chat_id, limit=50, offset=0):
-    url = f"{WEBHOOK}/im.dialog.messages.get"
-    params = {
-        "DIALOG_ID": f"chat{chat_id}",
-        "LIMIT": limit,
-        "OFFSET": offset
-    }
-    response = requests.get(url, params=params)
-    return response.json().get("result", {}).get("messages", [])
+
+def get_chat_history(chat_id, limit=50):
+    offset = 0
+    all_messages = []
+    previous_count = -1
+
+    while True:
+        url = f"{WEBHOOK}/im.dialog.messages.get"
+        params = {
+            "DIALOG_ID": f"chat{chat_id}",
+            "LIMIT": limit,
+            "OFFSET": offset
+        }
+        response = requests.get(url, params=params)
+        messages = response.json().get("result", {}).get("messages", [])
+
+        if not messages:
+            break
+
+        all_messages.extend(messages)
+        offset += limit
+
+        if len(all_messages) == previous_count:
+            break
+        previous_count = len(all_messages)
+
+    return all_messages
+
 
 def extract_participants(chat):
     if chat.get("type") == "chat":
         return [user["name"] for user in chat.get("users", [])]
     return []
+
 
 def export_chat(chat_id, chat_name, messages):
     export = {
@@ -39,10 +60,11 @@ def export_chat(chat_id, chat_name, messages):
             "timestamp": msg["date"],
             "author": msg["author_id"],
             "text": msg["text"],
-            "type": "text",
+            "type": "file" if msg.get("params", {}).get("FILES") else "text",
             "attachments": []
         })
     return export
+
 
 st.title("Экспорт чатов из Bitrix24")
 
