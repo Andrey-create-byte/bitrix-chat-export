@@ -15,6 +15,8 @@ if "last_id" not in st.session_state:
     st.session_state.last_id = 0
 if "dialog_id" not in st.session_state:
     st.session_state.dialog_id = ""
+if "loading_complete" not in st.session_state:
+    st.session_state.loading_complete = False
 
 # Получение списка чатов
 def get_recent_chats():
@@ -31,7 +33,7 @@ def get_recent_chats():
         return []
 
 # Загрузка порции сообщений
-def load_messages(dialog_id, last_id=None, limit=500):
+def load_messages(dialog_id, last_id=None, limit=50):
     params = {
         "DIALOG_ID": dialog_id,
         "LIMIT": limit
@@ -106,7 +108,7 @@ def filter_messages_by_date(messages, start_date, end_date):
     return filtered
 
 # Основной интерфейс
-st.title("Экспорт истории чатов Bitrix24 (с лимитом и догрузкой)")
+st.title("Экспорт истории чатов Bitrix24 (автодогрузка и счётчик)")
 
 # Загружаем чаты
 chats = get_recent_chats()
@@ -126,19 +128,32 @@ if selected_chat_title:
         st.session_state.dialog_id = f"chat{selected_chat_id}"
         st.session_state.all_messages = []
         st.session_state.last_id = 0
-        st.success("Готово! Нажмите 'Догрузить сообщения'.")
+        st.session_state.loading_complete = False
+        st.success("Готово! Нажмите 'Автодогрузить сообщения'.")
 
     if st.session_state.dialog_id:
-        if st.button("Догрузить сообщения"):
-            messages, new_last_id = load_messages(st.session_state.dialog_id, st.session_state.last_id, limit=500)
-            if messages:
+        if st.button("Автодогрузить сообщения"):
+            max_total = 2000  # максимальное количество сообщений на одну сессию
+            batch_size = 50
+            total_loaded = 0
+
+            while total_loaded < max_total:
+                messages, new_last_id = load_messages(st.session_state.dialog_id, st.session_state.last_id, limit=batch_size)
+                if not messages:
+                    st.session_state.loading_complete = True
+                    break
                 st.session_state.all_messages.extend(messages)
                 st.session_state.last_id = new_last_id
-                st.success(f"Догружено сообщений: {len(messages)} (всего {len(st.session_state.all_messages)})")
+                total_loaded += len(messages)
+
+            if st.session_state.loading_complete:
+                st.success(f"Все сообщения загружены. Всего загружено: {len(st.session_state.all_messages)} сообщений.")
             else:
-                st.warning("Больше сообщений нет или достигнут конец истории.")
+                st.warning(f"Достигнут лимит {max_total} сообщений. Загружено: {len(st.session_state.all_messages)}.")
 
         if st.session_state.all_messages:
+            st.info(f"Всего загружено сообщений: {len(st.session_state.all_messages)}")
+
             # Автоподбор диапазона дат
             all_dates = []
             for msg in st.session_state.all_messages:
