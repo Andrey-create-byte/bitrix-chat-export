@@ -4,17 +4,17 @@ import json
 import io
 from datetime import datetime
 
-# 1. Конфигурация
+# Читаем WEBHOOK из секрета
 WEBHOOK = st.secrets["WEBHOOK"]
 
-# 2. Функция получения списка чатов
+# Получение списка чатов
 def get_recent_chats():
     url = f"{WEBHOOK}/im.recent.get"
     response = requests.get(url)
     result = response.json().get("result", [])
     return result
 
-# 3. Функция получения истории сообщений
+# Получение истории сообщений
 def get_chat_history(chat_id, limit=50):
     all_messages = []
     seen_ids = set()
@@ -36,7 +36,7 @@ def get_chat_history(chat_id, limit=50):
         if not messages:
             break
 
-        # Исключаем дубликаты
+        # Убираем дубли
         new_messages = [msg for msg in messages if isinstance(msg, dict) and msg.get("id") not in seen_ids]
         if not new_messages:
             break
@@ -47,7 +47,7 @@ def get_chat_history(chat_id, limit=50):
 
     return all_messages
 
-# 4. Функция экспорта чата в JSON
+# Экспорт чата в JSON
 def export_chat(chat_id, chat_name, messages):
     export = {
         "chat_id": chat_id,
@@ -64,10 +64,10 @@ def export_chat(chat_id, chat_name, messages):
         })
     return export
 
-# 5. Основной интерфейс Streamlit
-st.title("Экспорт чатов из Bitrix24")
+# Основной интерфейс
+st.title("Экспорт истории чатов из Bitrix24")
 
-# Получаем список чатов
+# Загружаем чаты
 chats = get_recent_chats()
 group_chats = [chat for chat in chats if chat.get("CHAT_TYPE") == "chat"]
 
@@ -75,9 +75,9 @@ if not group_chats:
     st.error("Нет доступных групповых чатов для экспорта.")
     st.stop()
 
-# Строим карту для выбора
-chat_map = {f'{chat.get(\"TITLE\", \"Без названия\")} (ID: {chat[\"CHAT_ID\"]})': chat["CHAT_ID"] for chat in group_chats}
-selected_chat_title = st.selectbox("Выберите чат для экспорта:", list(chat_map.keys()))
+# Формируем карту для выбора
+chat_map = {f'{chat.get("TITLE", "Без названия")} (ID: {chat["CHAT_ID"]})': chat["CHAT_ID"] for chat in group_chats}
+selected_chat_title = st.selectbox("Выберите чат:", list(chat_map.keys()))
 
 if selected_chat_title:
     selected_chat_id = chat_map[selected_chat_title]
@@ -91,8 +91,9 @@ if selected_chat_title:
         st.subheader("Первые 2 сообщения для проверки:")
         st.json(all_messages[:2])
 
-        # Экспорт в JSON
+        # Экспортируем данные
         export_data = export_chat(selected_chat_id, selected_chat_title, all_messages)
+
         buffer = io.BytesIO()
         buffer.write(json.dumps(export_data, ensure_ascii=False, indent=2).encode("utf-8"))
         buffer.seek(0)
