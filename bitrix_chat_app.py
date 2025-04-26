@@ -25,10 +25,6 @@ def get_messages(dialog_id, last_id=0, limit=50):
     params = {
         "DIALOG_ID": dialog_id,
         "LIMIT": limit,
-        "WITH_FILES": "Y",
-        "WITH_ATTACH": "Y",
-        "WITH_FORWARD": "Y",
-        "WITH_PARAMS": "Y",
     }
     if last_id:
         params["LAST_ID"] = last_id
@@ -66,10 +62,9 @@ def load_full_history(dialog_id, max_messages=5000):
 def filter_messages_by_date(messages, start_date, end_date):
     filtered = []
     for msg in messages:
-        msg_date_str = msg.get("date")
-        if msg_date_str:
+        if "date" in msg:
             try:
-                msg_datetime = dateutil.parser.isoparse(msg_date_str)
+                msg_datetime = dateutil.parser.isoparse(msg["date"])
                 if start_date <= msg_datetime.date() <= end_date:
                     filtered.append(msg)
             except Exception:
@@ -85,72 +80,35 @@ def get_user_info(user_id):
     try:
         result = response.json().get("result", [])
         if result and isinstance(result, list):
-            return result[0]
+            user = result[0]
+            return f"{user.get('LAST_NAME', '')} {user.get('NAME', '')}".strip()
     except Exception:
         return None
 
-def try_extract_text_from_attach(msg):
-    if "params" in msg and isinstance(msg["params"], dict):
-        attach = msg["params"].get("ATTACH")
-        if attach and isinstance(attach, list) and len(attach) > 0:
-            attach_obj = attach[0]
-            description = attach_obj.get("DESCRIPTION", "")
-            if description:
-                return description
-            blocks = attach_obj.get("BLOCKS", [])
-            if blocks and isinstance(blocks, list):
-                texts = []
-                for block in blocks:
-                    if "TEXT" in block and "TEXT" in block["TEXT"]:
-                        texts.append(block["TEXT"]["TEXT"])
-                if texts:
-                    return " ".join(texts)
-    return None
-
-def enrich_messages(messages):
+def enrich_with_author_names(messages):
     author_ids = {msg.get("author_id") for msg in messages if msg.get("author_id")}
     author_info_map = {}
 
     for author_id in author_ids:
-        user_info = get_user_info(author_id)
-        if user_info:
-            author_info_map[author_id] = {
-                "full_name": f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')}".strip(),
-                "work_position": user_info.get('WORK_POSITION', '')
-            }
-        else:
-            author_info_map[author_id] = {
-                "full_name": "Неизвестный пользователь",
-                "work_position": ""
-            }
+        user_name = get_user_info(author_id)
+        if not user_name:
+            user_name = "Неизвестный пользователь"
+        author_info_map[author_id] = user_name
         time.sleep(0.1)
 
+    simplified_messages = []
     for msg in messages:
-        author_id = msg.get("author_id")
-        author_info = author_info_map.get(author_id, {"full_name": "Неизвестный пользователь", "work_position": ""})
-        msg["author_name"] = author_info["full_name"]
-        msg["author_position"] = author_info["work_position"]
+        msg_datetime = dateutil.parser.isoparse(msg["date"])
+        simplified_messages.append({
+            "date": msg_datetime.strftime("%Y-%m-%d"),
+            "time": msg_datetime.strftime("%H:%M:%S"),
+            "author_name": author_info_map.get(msg.get("author_id"), "Неизвестный пользователь"),
+            "text": msg.get("text", "").strip()
+        })
 
-        forward_text = ""
-        forward_id = None
-        if "params" in msg and isinstance(msg["params"], dict):
-            forward_id = msg["params"].get("FORWARD_ID")
-        
-        # Пробуем загрузить текст пересланного сообщения (через FORWARD_ID невозможно, см. предыдущие объяснения)
-        if forward_id:
-            forward_text = "(Пересланный текст недоступен через webhook)"
-        
-        # Пробуем достать из ATTACH если текст не найден
-        if not forward_text or forward_text == "(Пересланный текст недоступен через webhook)":
-            attach_text = try_extract_text_from_attach(msg)
-            if attach_text:
-                forward_text = attach_text
+    return simplified_messages
 
-        msg["forward_text"] = forward_text
-
-    return messages
-
-st.title("Bitrix24: Полная выгрузка чата с ФИО и текстами пересланных сообщений через ATTACH")
+st.title("Bitrix24: Упрощённая выгрузка переписки (дата, автор, текст)")
 
 chats = get_recent_chats()
 if not chats:
@@ -187,15 +145,15 @@ if selected_chat_title:
 
         st.success(f"Сообщений в выбранном диапазоне: {len(filtered_messages)}")
 
-        enriched_messages = enrich_messages(filtered_messages)
+        simplified = enrich_with_author_names(filtered_messages)
 
         buffer = io.BytesIO()
-        buffer.write(json.dumps(enriched_messages, ensure_ascii=False, indent=2).encode("utf-8"))
+        buffer.write(json.dumps(simplified, ensure_ascii=False, indent=2).encode("utf-8"))
         buffer.seek(0)
 
         st.download_button(
-            "Скачать переписку с ФИО и извлечёнными пересланными текстами",
+            "Скачать упрощённую переписку",
             buffer,
-            file_name=f"chat_{selected_chat_id}_export_{start_date}_to_{end_date}_full.json",
+            file_name=f"chat_{selected_chat_id}_export_{start_date}_to_{end_date}_simple.json",
             mime="application/json"
         )
