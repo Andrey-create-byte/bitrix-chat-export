@@ -11,10 +11,18 @@ WEBHOOK = st.secrets["WEBHOOK"]
 def get_recent_chats():
     url = f"{WEBHOOK}/im.recent.get"
     response = requests.get(url)
-    result = response.json().get("result", [])
-    return result
+    st.write("Статус ответа:", response.status_code)  # Показываем статус запроса
+    if response.status_code != 200:
+        st.error(f"Ошибка ответа сервера: {response.text}")
+        return []
+    try:
+        result = response.json().get("result", [])
+        return result
+    except json.JSONDecodeError:
+        st.error("Ошибка разбора JSON ответа.")
+        return []
 
-# Получение истории сообщений
+# Получение истории сообщений для чата
 def get_chat_history(chat_id, limit=50):
     all_messages = []
     seen_ids = set()
@@ -30,24 +38,28 @@ def get_chat_history(chat_id, limit=50):
 
         url = f"{WEBHOOK}/im.dialog.messages.get"
         response = requests.get(url, params=params)
+
+        if response.status_code != 200:
+            st.error(f"Ошибка получения сообщений: {response.text}")
+            break
+
         result = response.json().get("result", {})
         messages = result.get("messages", [])
 
         if not messages:
             break
 
-        # Убираем дубли
         new_messages = [msg for msg in messages if isinstance(msg, dict) and msg.get("id") not in seen_ids]
         if not new_messages:
             break
 
         all_messages.extend(new_messages)
         seen_ids.update(msg["id"] for msg in new_messages)
-        last_id = min(msg["id"] for msg in new_messages)
+        last_id = min(msg["id"] for msg in new_messages if "id" in msg)
 
     return all_messages
 
-# Экспорт чата в JSON
+# Экспорт чата в JSON формате
 def export_chat(chat_id, chat_name, messages):
     export = {
         "chat_id": chat_id,
@@ -64,20 +76,29 @@ def export_chat(chat_id, chat_name, messages):
         })
     return export
 
-# Основной интерфейс
+# Основной интерфейс приложения
 st.title("Экспорт истории чатов из Bitrix24")
 
 # Загружаем чаты
 chats = get_recent_chats()
-group_chats = [chat for chat in chats if chat.get("CHAT_TYPE") == "chat"]
 
-if not group_chats:
-    st.error("Нет доступных групповых чатов для экспорта.")
+# Отладочный вывод всех чатов
+st.subheader("Отладка: данные, полученные от Bitrix24")
+st.json(chats)
+
+if not chats:
+    st.error("Не удалось получить список чатов. Проверьте настройки вебхука.")
     st.stop()
 
-# Формируем карту для выбора
-chat_map = {f'{chat.get("TITLE", "Без названия")} (ID: {chat["CHAT_ID"]})': chat["CHAT_ID"] for chat in group_chats}
-selected_chat_title = st.selectbox("Выберите чат:", list(chat_map.keys()))
+# Формируем карту для выбора (показываем все чаты, не только групповые)
+chat_map = {f'{chat.get("TITLE", "Без названия")} (ID: {chat.get("CHAT_ID", "неизвестно")})': chat["CHAT_ID"] for chat in chats if "CHAT_ID" in chat}
+
+if not chat_map:
+    st.error("Нет доступных чатов для экспорта.")
+    st.stop()
+
+# Выбор чата пользователем
+selected_chat_title = st.selectbox("Выберите чат для экспорта:", list(chat_map.keys()))
 
 if selected_chat_title:
     selected_chat_id = chat_map[selected_chat_title]
@@ -85,13 +106,14 @@ if selected_chat_title:
     if st.button("Выгрузить все сообщения"):
         st.info("Загружаем сообщения...")
         all_messages = get_chat_history(selected_chat_id)
+
         st.success(f"Загрузка завершена. Всего сообщений: {len(all_messages)}")
 
-        # Отладочная информация
+        # Отладочная информация: показываем несколько сообщений
         st.subheader("Первые 2 сообщения для проверки:")
         st.json(all_messages[:2])
 
-        # Экспортируем данные
+        # Формируем JSON файл
         export_data = export_chat(selected_chat_id, selected_chat_title, all_messages)
 
         buffer = io.BytesIO()
