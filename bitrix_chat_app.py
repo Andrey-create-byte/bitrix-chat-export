@@ -4,212 +4,143 @@ import json
 import io
 from datetime import datetime, date
 import dateutil.parser
+import time
 
-# Читаем WEBHOOK из секрета
+# === Инициализация из Streamlit ===
 WEBHOOK = st.secrets["WEBHOOK"]
-
-# Инициализация состояния
-if "all_messages" not in st.session_state:
-    st.session_state.all_messages = []
-if "last_id" not in st.session_state:
-    st.session_state.last_id = 0
-if "dialog_id" not in st.session_state:
-    st.session_state.dialog_id = ""
-if "loading_complete" not in st.session_state:
-    st.session_state.loading_complete = False
 
 # Получение списка чатов
 def get_recent_chats():
     url = f"{WEBHOOK}/im.recent.get"
     response = requests.get(url)
     if response.status_code != 200:
-        st.error(f"Ошибка ответа сервера: {response.text}")
+        st.error(f"Ошибка получения чатов: {response.text}")
         return []
     try:
         result = response.json().get("result", [])
         return result
     except json.JSONDecodeError:
-        st.error("Ошибка разбора JSON ответа.")
+        st.error("Ошибка разбора JSON при получении чатов.")
         return []
 
-# Загрузка порции сообщений
-def load_messages(dialog_id, last_id=None, limit=50):
+# Получение сообщений чата с полными параметрами
+def get_messages(dialog_id, last_id=0, limit=50):
     params = {
         "DIALOG_ID": dialog_id,
-        "LIMIT": limit
+        "LIMIT": limit,
+        "WITH_FILES": "Y",
+        "WITH_ATTACH": "Y",
+        "WITH_FORWARD": "Y",
+        "WITH_PARAMS": "Y",
     }
     if last_id:
         params["LAST_ID"] = last_id
-
     url = f"{WEBHOOK}/im.dialog.messages.get"
     response = requests.get(url, params=params)
-
     if response.status_code != 200:
-        st.error(f"Ошибка получения сообщений: {response.text}")
-        return [], None
-
-    result = response.json().get("result", {})
-    messages = result.get("messages", [])
-
-    if not messages:
-        return [], None
-
-    new_last_id = min(msg["id"] for msg in messages if "id" in msg)
-    return messages, new_last_id
-
-# Получение информации о пользователе
-def get_user_info(user_id):
-    url = f"{WEBHOOK}/user.get"
-    params = {"ID": user_id}
-    response = requests.get(url, params=params)
-    if response.status_code != 200:
+        st.error(f"Ошибка запроса сообщений: {response.text}")
         return None
-    try:
-        result = response.json().get("result", [])
-        if result and isinstance(result, list):
-            return result[0]
-    except Exception:
-        return None
+    return response.json().get("result", {})
 
-# Экспорт чата в JSON
-def export_chat(chat_id, chat_name, messages, author_info_map):
-    export = {
-        "chat_id": chat_id,
-        "chat_name": chat_name,
-        "messages": []
-    }
-    for msg in messages:
-        author_id = msg.get("author_id")
-        author_info = author_info_map.get(author_id, {"full_name": "Неизвестный пользователь", "work_position": ""})
-        export["messages"].append({
-            "id": msg.get("id"),
-            "timestamp": msg.get("date"),
-            "author_id": author_id,
-            "author_name": author_info["full_name"],
-            "author_position": author_info["work_position"],
-            "text": msg.get("text"),
-            "params": msg.get("params", {})
-        })
-    return export
+# Загрузка всей переписки
+def load_full_history(dialog_id, max_messages=5000):
+    all_messages = []
+    seen_ids = set()
+    last_id = 0
+    loaded = 0
+
+    while loaded < max_messages:
+        data = get_messages(dialog_id, last_id)
+        if not data or not data.get("messages"):
+            break
+
+        messages = data["messages"]
+        for msg in messages:
+            msg_id = msg.get("id")
+            if msg_id and msg_id not in seen_ids:
+                all_messages.append(msg)
+                seen_ids.add(msg_id)
+
+        last_id = min([msg["id"] for msg in messages if "id" in msg])
+        loaded += len(messages)
+        time.sleep(0.2)  # Пауза, чтобы не перебивать API
+
+    return all_messages
 
 # Фильтрация сообщений по дате
 def filter_messages_by_date(messages, start_date, end_date):
     filtered = []
     for msg in messages:
         msg_date_str = msg.get("date")
-        if not msg_date_str:
-            continue
-        try:
-            msg_datetime = dateutil.parser.isoparse(msg_date_str)
-        except Exception:
-            continue
-        if start_date <= msg_datetime.date() <= end_date:
-            filtered.append(msg)
+        if msg_date_str:
+            try:
+                msg_datetime = dateutil.parser.isoparse(msg_date_str)
+                if start_date <= msg_datetime.date() <= end_date:
+                    filtered.append(msg)
+            except Exception:
+                continue
     return filtered
 
-# Основной интерфейс
-st.title("Экспорт истории чатов Bitrix24 (автодогрузка и счётчик)")
+# === Интерфейс Streamlit ===
+st.title("Bitrix24: Полная выгрузка чата с выбором даты")
 
-# Загружаем чаты
+# 1. Загрузка чатов
 chats = get_recent_chats()
-
 if not chats:
-    st.error("Не удалось получить список чатов.")
     st.stop()
 
-chat_map = {f'{chat.get("title", "Без названия")} (ID: {chat.get("chat_id", "нет id")})': chat["chat_id"] for chat in chats if "chat_id" in chat}
-
+chat_map = {f'{chat.get("title", "Без названия")} (ID: {chat.get("chat_id")})': chat["chat_id"] for chat in chats if "chat_id" in chat}
 selected_chat_title = st.selectbox("Выберите чат:", list(chat_map.keys()))
 
 if selected_chat_title:
     selected_chat_id = chat_map[selected_chat_title]
+    dialog_id = f"chat{selected_chat_id}"
 
-    if st.button("Начать загрузку сообщений"):
-        st.session_state.dialog_id = f"chat{selected_chat_id}"
-        st.session_state.all_messages = []
-        st.session_state.last_id = 0
-        st.session_state.loading_complete = False
-        st.success("Готово! Нажмите 'Автодогрузить сообщения'.")
+    max_messages = st.slider("Максимальное количество сообщений для выгрузки", 100, 10000, step=100, value=1000)
 
-    if st.session_state.dialog_id:
-        if st.button("Автодогрузить сообщения"):
-            max_total = 2000  # максимальное количество сообщений на одну сессию
-            batch_size = 50
-            total_loaded = 0
+    if st.button("Загрузить историю чата"):
+        st.info("Загружаем все сообщения...")
+        all_messages = load_full_history(dialog_id, max_messages=max_messages)
 
-            while total_loaded < max_total:
-                messages, new_last_id = load_messages(st.session_state.dialog_id, st.session_state.last_id, limit=batch_size)
-                if not messages:
-                    st.session_state.loading_complete = True
-                    break
-                st.session_state.all_messages.extend(messages)
-                st.session_state.last_id = new_last_id
-                total_loaded += len(messages)
+        if not all_messages:
+            st.error("Сообщений не найдено.")
+            st.stop()
 
-            if st.session_state.loading_complete:
-                st.success(f"Все сообщения загружены. Всего загружено: {len(st.session_state.all_messages)} сообщений.")
-            else:
-                st.warning(f"Достигнут лимит {max_total} сообщений. Загружено: {len(st.session_state.all_messages)}.")
+        st.success(f"Загружено сообщений: {len(all_messages)}")
 
-        if st.session_state.all_messages:
-            st.info(f"Всего загружено сообщений: {len(st.session_state.all_messages)}")
+        all_dates = []
+        for msg in all_messages:
+            if "date" in msg:
+                try:
+                    msg_datetime = dateutil.parser.isoparse(msg["date"])
+                    all_dates.append(msg_datetime.date())
+                except Exception:
+                    continue
 
-            # Автоподбор диапазона дат
-            all_dates = []
-            for msg in st.session_state.all_messages:
-                msg_date_str = msg.get("date")
-                if msg_date_str:
-                    try:
-                        msg_datetime = dateutil.parser.isoparse(msg_date_str)
-                        all_dates.append(msg_datetime.date())
-                    except Exception:
-                        continue
+        if all_dates:
+            min_date = min(all_dates)
+            max_date = max(all_dates)
 
-            if all_dates:
-                min_date = min(all_dates)
-                max_date = max(all_dates)
+            st.success(f"Диапазон дат в чате: {min_date} — {max_date}")
 
-                st.success(f"Сообщения с {min_date} по {max_date}")
+            start_date = st.date_input("Начальная дата фильтрации", value=min_date, min_value=min_date, max_value=max_date)
+            end_date = st.date_input("Конечная дата фильтрации", value=max_date, min_value=min_date, max_value=max_date)
 
-                start_date = st.date_input("Начальная дата", value=min_date, min_value=min_date, max_value=max_date)
-                end_date = st.date_input("Конечная дата", value=max_date, min_value=min_date, max_value=max_date)
+            if start_date > end_date:
+                st.error("Начальная дата должна быть раньше конечной.")
+                st.stop()
 
-                if start_date > end_date:
-                    st.error("Начальная дата должна быть раньше конечной даты!")
-                    st.stop()
+            filtered_messages = filter_messages_by_date(all_messages, start_date, end_date)
 
-                filtered_messages = filter_messages_by_date(st.session_state.all_messages, start_date, end_date)
+            st.success(f"Сообщений после фильтрации: {len(filtered_messages)}")
 
-                st.success(f"Сообщений после фильтрации: {len(filtered_messages)}")
+            buffer = io.BytesIO()
+            buffer.write(json.dumps(filtered_messages, ensure_ascii=False, indent=2).encode("utf-8"))
+            buffer.seek(0)
 
-                if filtered_messages:
-                    # Получение данных об авторах
-                    author_ids = {msg["author_id"] for msg in filtered_messages if "author_id" in msg}
-
-                    author_info_map = {}
-                    for author_id in author_ids:
-                        user_info = get_user_info(author_id)
-                        if user_info:
-                            author_info_map[author_id] = {
-                                "full_name": f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')}".strip(),
-                                "work_position": user_info.get('WORK_POSITION', '')
-                            }
-                        else:
-                            author_info_map[author_id] = {
-                                "full_name": "Неизвестный пользователь",
-                                "work_position": ""
-                            }
-
-                    # Экспортируем
-                    export_data = export_chat(selected_chat_id, selected_chat_title, filtered_messages, author_info_map)
-
-                    buffer = io.BytesIO()
-                    buffer.write(json.dumps(export_data, ensure_ascii=False, indent=2).encode("utf-8"))
-                    buffer.seek(0)
-
-                    st.download_button(
-                        "Скачать историю чата в JSON",
-                        buffer,
-                        file_name=f"chat_{selected_chat_id}_history_with_users.json",
-                        mime="application/json"
-                    )
+            st.download_button(
+                "Скачать отфильтрованную переписку",
+                buffer,
+                file_name=f"chat_{selected_chat_id}_export_{start_date}_to_{end_date}.json",
+                mime="application/json"
+            )
