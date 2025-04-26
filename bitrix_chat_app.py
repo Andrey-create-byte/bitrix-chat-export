@@ -6,10 +6,8 @@ import time
 from datetime import date
 import dateutil.parser
 
-# === Инициализация из Streamlit ===
 WEBHOOK = st.secrets["WEBHOOK"]
 
-# Получение списка чатов
 def get_recent_chats():
     url = f"{WEBHOOK}/im.recent.get"
     response = requests.get(url)
@@ -23,7 +21,6 @@ def get_recent_chats():
         st.error("Ошибка разбора JSON при получении чатов.")
         return []
 
-# Получение сообщений чата
 def get_messages(dialog_id, last_id=0, limit=50):
     params = {
         "DIALOG_ID": dialog_id,
@@ -42,22 +39,24 @@ def get_messages(dialog_id, last_id=0, limit=50):
         return None
     return response.json().get("result", {})
 
-# Получение текста пересланного сообщения
 def get_forwarded_message(forward_id):
     url = f"{WEBHOOK}/im.message.get"
-    params = {
-        "ID": forward_id
-    }
-    response = requests.get(url, params=params)
-    if response.status_code != 200:
-        return None
-    try:
-        result = response.json().get("result", {})
-        return result.get("message", {}).get("text", "")
-    except Exception:
-        return None
+    params = {"ID": forward_id}
+    tries = 0
+    while tries < 3:
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            try:
+                result = response.json().get("result", {})
+                text = result.get("message", {}).get("text", "")
+                if text:
+                    return text
+            except Exception:
+                pass
+        time.sleep(0.5)
+        tries += 1
+    return None
 
-# Загрузка полной истории сообщений
 def load_full_history(dialog_id, max_messages=5000):
     all_messages = []
     seen_ids = set()
@@ -82,7 +81,6 @@ def load_full_history(dialog_id, max_messages=5000):
 
     return all_messages
 
-# Фильтрация сообщений по дате
 def filter_messages_by_date(messages, start_date, end_date):
     filtered = []
     for msg in messages:
@@ -96,7 +94,6 @@ def filter_messages_by_date(messages, start_date, end_date):
                 continue
     return filtered
 
-# Получение информации о пользователях по ID
 def get_user_info(user_id):
     url = f"{WEBHOOK}/user.get"
     params = {"ID": user_id}
@@ -110,7 +107,6 @@ def get_user_info(user_id):
     except Exception:
         return None
 
-# Обогащение сообщений ФИО и текстами пересланных сообщений
 def enrich_messages(messages):
     author_ids = {msg.get("author_id") for msg in messages if msg.get("author_id")}
     author_info_map = {}
@@ -127,7 +123,7 @@ def enrich_messages(messages):
                 "full_name": "Неизвестный пользователь",
                 "work_position": ""
             }
-        time.sleep(0.1)  # Пауза чтобы не перегружать API
+        time.sleep(0.1)
 
     for msg in messages:
         author_id = msg.get("author_id")
@@ -135,21 +131,23 @@ def enrich_messages(messages):
         msg["author_name"] = author_info["full_name"]
         msg["author_position"] = author_info["work_position"]
 
-        # Обработка пересланных сообщений
         forward_id = None
         if "params" in msg and isinstance(msg["params"], dict):
             forward_id = msg["params"].get("FORWARD_ID")
         if forward_id:
             forwarded_text = get_forwarded_message(forward_id)
-            msg["forward_text"] = forwarded_text if forwarded_text else ""
-            time.sleep(0.1)
+            if forwarded_text:
+                msg["forward_text"] = forwarded_text
+            else:
+                msg["forward_text"] = "(Пересланное сообщение не доступно)"
+
+        if "forward_text" not in msg:
+            msg["forward_text"] = ""
 
     return messages
 
-# === Интерфейс Streamlit ===
-st.title("Bitrix24: Полная выгрузка чата с ФИО и пересланными сообщениями")
+st.title("Bitrix24: Полная выгрузка чата с ФИО и текстами пересланных сообщений")
 
-# 1. Выбор чата
 chats = get_recent_chats()
 if not chats:
     st.stop()
@@ -161,7 +159,6 @@ if selected_chat_title:
     selected_chat_id = chat_map[selected_chat_title]
     dialog_id = f"chat{selected_chat_id}"
 
-    # 2. Выбор периода дат
     today = date.today()
     start_date = st.date_input("Начальная дата", value=today.replace(day=1))
     end_date = st.date_input("Конечная дата", value=today)
@@ -170,10 +167,8 @@ if selected_chat_title:
         st.error("Начальная дата должна быть раньше конечной.")
         st.stop()
 
-    # 3. Выбор лимита сообщений
     max_messages = st.slider("Максимальное количество сообщений для загрузки", 100, 10000, step=100, value=1000)
 
-    # 4. Кнопка загрузки
     if st.button("Загрузить историю чата"):
         st.info("Загружаем сообщения...")
         all_messages = load_full_history(dialog_id, max_messages=max_messages)
@@ -184,12 +179,10 @@ if selected_chat_title:
 
         st.success(f"Загружено сообщений: {len(all_messages)}")
 
-        # Фильтрация по выбранному диапазону
         filtered_messages = filter_messages_by_date(all_messages, start_date, end_date)
 
         st.success(f"Сообщений в выбранном диапазоне: {len(filtered_messages)}")
 
-        # Обогащение сообщений ФИО и текстами пересланных
         enriched_messages = enrich_messages(filtered_messages)
 
         buffer = io.BytesIO()
@@ -197,7 +190,7 @@ if selected_chat_title:
         buffer.seek(0)
 
         st.download_button(
-            "Скачать переписку с ФИО и пересланными сообщениями",
+            "Скачать переписку с ФИО и текстами пересланных сообщений",
             buffer,
             file_name=f"chat_{selected_chat_id}_export_{start_date}_to_{end_date}_full.json",
             mime="application/json"
