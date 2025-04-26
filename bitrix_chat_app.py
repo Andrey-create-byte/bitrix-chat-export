@@ -1,179 +1,109 @@
+import streamlit as st
 import requests
 import json
-import os
-import shutil
-import streamlit as st
-from zipfile import ZipFile
+import io
 from datetime import datetime
+from zipfile import ZipFile
+import os
 
-# Чтение секрета из Streamlit secrets
-WEBHOOK_URL = st.secrets["WEBHOOK_URL"]
+WEBHOOK = st.secrets["WEBHOOK"]
 
-# Функция для получения сообщений из чата
-def get_chat_messages(dialog_id, limit=200, offset=0):
-    url = f"{WEBHOOK_URL}im.dialog.messages.get.json"
-    payload = {
-        "DIALOG_ID": dialog_id,
-        "LIMIT": limit,
-        "OFFSET": offset
-    }
-    response = requests.post(url, json=payload)
-    return response.json()
-
-# Функция для получения списка последних чатов
+# Получение списка чатов
 def get_recent_chats():
-    url = f"{WEBHOOK_URL}im.recent.get.json"
+    url = f"{WEBHOOK}/im.recent.get"
     response = requests.get(url)
-    return response.json()
+    return response.json().get("result", [])
 
-# Сохранение сообщений в JSON
-def save_messages_to_json(messages, filename):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(messages, f, indent=2, ensure_ascii=False)
+# Получение истории сообщений
+def get_chat_history(chat_id, limit=50):
+    all_messages = []
+    seen_ids = set()
+    last_id = 0
 
-# Сохранение сообщений в TXT
-def save_messages_to_txt(messages, filename):
-    with open(filename, "w", encoding="utf-8") as f:
-        for message in messages:
-            author_id = message.get("author_id", "Unknown")
-            date = message.get("date_create", "Unknown date")
-            text = message.get("message", "")
-            f.write(f"{date} - Author {author_id}: {text}\n")
-            if 'files' in message:
-                for file in message['files']:
-                    file_name = file.get('name', 'unnamed_file')
-                    file_url = file.get('url_download', '')
-                    f.write(f"[Файл] {file_name}: {file_url}\n")
-            f.write("-" * 50 + "\n")
+    while True:
+        params = {
+            "DIALOG_ID": f"chat{chat_id}",
+            "LIMIT": limit
+        }
+        if last_id:
+            params["LAST_ID"] = last_id
 
-# Скачивание файлов с прогресс-баром
-def download_files(messages, folder_name):
-    os.makedirs(folder_name, exist_ok=True)
-    file_count = sum(len(message.get('files', [])) for message in messages)
-    if file_count == 0:
-        return
-    progress_bar = st.progress(0)
-    downloaded = 0
+        url = f"{WEBHOOK}/im.dialog.messages.get"
+        response = requests.get(url, params=params)
+        result = response.json().get("result", {})
+        messages = result.get("messages", [])
 
-    for message in messages:
-        if 'files' in message:
-            for file in message['files']:
-                file_name = file.get('name', 'unnamed_file')
-                file_url = file.get('url_download', '')
-                if file_url:
-                    response = requests.get(file_url)
-                    if response.status_code == 200:
-                        with open(os.path.join(folder_name, file_name), 'wb') as f:
-                            f.write(response.content)
-                downloaded += 1
-                progress_bar.progress(min(downloaded / file_count, 1.0))
+        if not messages:
+            break
 
-# Архивация папки с файлами
-def zip_folder(folder_name, zip_name):
-    with ZipFile(zip_name, 'w') as zipf:
-        for root, dirs, files in os.walk(folder_name):
-            for file in files:
-                zipf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), folder_name))
+        new_messages = [msg for msg in messages if isinstance(msg, dict) and msg.get("id") not in seen_ids]
+        if not new_messages:
+            break
 
-# Основной процесс
-if __name__ == "__main__":
-    st.title("Экспорт истории чатов Bitrix24")
+        all_messages.extend(new_messages)
+        seen_ids.update(msg["id"] for msg in new_messages)
+        last_id = min(msg["id"] for msg in new_messages)
 
-    # Получаем список чатов
-    recent_chats_response = get_recent_chats()
-    chats_list = []
-    if 'result' in recent_chats_response:
-        for chat in recent_chats_response['result']:
-            if chat.get('CHAT_TYPE') == 'chat':
-                dialog_id = f"chat{chat.get('CHAT_ID')}"
-            elif chat.get('CHAT_TYPE') == 'openline':
-                dialog_id = f"lines{chat.get('CHAT_ID')}"
-            elif chat.get('CHAT_TYPE') == 'user':
-                dialog_id = f"user{chat.get('ID')}"
-            else:
-                dialog_id = ''
+    return all_messages
 
-            title = chat.get('TITLE', '') or chat.get('NAME', '') or dialog_id
+# Экспорт чата в формат JSON
+def export_chat(chat_id, chat_name, messages):
+    export = {
+        "chat_id": chat_id,
+        "chat_name": chat_name,
+        "type": "group_chat",
+        "participants": [],
+        "messages": []
+    }
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
 
-            if dialog_id:
-                chats_list.append((title, dialog_id))
+        params = msg.get("params", {})
+        is_file = isinstance(params, dict) and params.get("FILES")
 
-    chats_list = sorted(chats_list)
+        export["messages"].append({
+            "id": msg.get("id"),
+            "timestamp": msg.get("date"),
+            "author": msg.get("author_id"),
+            "text": msg.get("text"),
+            "type": "file" if is_file else "text",
+            "attachments": []
+        })
+    return export
 
-    if chats_list:
-        chat_selection = st.selectbox("Выберите чат для выгрузки", options=chats_list, format_func=lambda x: x[0])
-        selected_dialog_id = chat_selection[1]
-    else:
-        st.error("Не удалось получить список чатов. Убедитесь, что у вебхука есть права на доступ к сообщениям.")
-        st.stop()
+# Основное приложение
+st.title("Экспорт чатов из Bitrix24")
 
-    filter_type = st.selectbox("Что выгружать?", ["Все сообщения", "Только сообщения с файлами"])
-    start_date = st.date_input("Начальная дата фильтрации (по дате сообщения)")
-    end_date = st.date_input("Конечная дата фильтрации (по дате сообщения)")
+# Получаем список чатов
+chats = get_recent_chats()
+group_chats = [chat for chat in chats if chat.get("type") == "chat"]
 
-    if st.button("Выгрузить сообщения"):
-        if start_date > end_date:
-            st.error("Начальная дата не может быть позже конечной даты!")
-        else:
-            all_messages = []
-            offset = 0
-            batch_size = 200
+chat_map = {f'{chat.get(\"title\", \"Без названия\")} (ID: {chat[\"chat_id\"]})': chat["chat_id"] for chat in group_chats}
+selected_chat_title = st.selectbox("Выберите чат:", list(chat_map.keys()))
 
-            # Постраничная загрузка всех сообщений
-            while True:
-                data = get_chat_messages(selected_dialog_id, limit=batch_size, offset=offset)
-                messages = data.get("result", {}).get("messages", [])
+if selected_chat_title:
+    selected_chat_id = chat_map[selected_chat_title]
 
-                if not messages:
-                    break
+    if st.button("Выгрузить все сообщения"):
+        st.info("Загружаем сообщения...")
+        all_messages = get_chat_history(selected_chat_id)
+        st.success(f"Загрузка завершена. Всего сообщений: {len(all_messages)}")
 
-                all_messages.extend(messages)
-                offset += batch_size
+        # Отладочная информация
+        st.subheader("Отладочная информация (первые 2 сообщения):")
+        st.json(all_messages[:2])
 
-            # Фильтрация сообщений по дате и типу
-            filtered_messages = []
-            for msg in all_messages:
-                msg_date = datetime.strptime(msg.get("date_create", "1970-01-01T00:00:00+00:00")[:10], "%Y-%m-%d").date()
-                if start_date <= msg_date <= end_date:
-                    if filter_type == "Только сообщения с файлами":
-                        if 'files' in msg and msg['files']:
-                            filtered_messages.append(msg)
-                    else:
-                        filtered_messages.append(msg)
+        export_data = export_chat(selected_chat_id, selected_chat_title, all_messages)
 
-            st.success(f"Выгружено сообщений после фильтрации: {len(filtered_messages)}")
+        # Сохраняем в буфер для скачивания
+        buffer = io.BytesIO()
+        buffer.write(json.dumps(export_data, ensure_ascii=False, indent=2).encode("utf-8"))
+        buffer.seek(0)
 
-            # Сохраняем в JSON и TXT
-            filename_json = f"chat_{selected_dialog_id}_messages.json"
-            filename_txt = f"chat_{selected_dialog_id}_messages.txt"
-            files_folder = f"chat_{selected_dialog_id}_files"
-            zip_filename = f"{files_folder}.zip"
-
-            save_messages_to_json(filtered_messages, filename_json)
-            save_messages_to_txt(filtered_messages, filename_txt)
-            download_files(filtered_messages, files_folder)
-            zip_folder(files_folder, zip_filename)
-
-            # Кнопки скачивания
-            with open(filename_json, "r", encoding="utf-8") as f:
-                st.download_button('Скачать JSON сообщений', f, file_name=filename_json, mime='application/json')
-
-            with open(filename_txt, "r", encoding="utf-8") as f:
-                st.download_button('Скачать TXT сообщений', f, file_name=filename_txt, mime='text/plain')
-
-            with open(zip_filename, "rb") as f:
-                st.download_button('Скачать ZIP файлов', f, file_name=zip_filename, mime='application/zip')
-
-            # Вывод таблицы сообщений
-            simplified_messages = [
-                {
-                    "Дата": message.get("date_create", "Unknown"),
-                    "Автор ID": message.get("author_id", "Unknown"),
-                    "Сообщение": message.get("message", "")
-                }
-                for message in filtered_messages
-            ]
-
-            st.dataframe(simplified_messages)
-
-            st.info(f"Файлы сохранены и архивированы: {zip_filename}")
+        st.download_button(
+            "Скачать JSON",
+            buffer,
+            file_name=f"exported_chat_{selected_chat_id}.json",
+            mime="application/json"
+        )
