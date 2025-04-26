@@ -60,18 +60,36 @@ def get_chat_history(dialog_id, limit=50):
 
     return all_messages
 
+# Получение информации о пользователе по его ID
+def get_user_info(user_id):
+    url = f"{WEBHOOK}/user.get"
+    params = {"ID": user_id}
+    response = requests.get(url, params=params)
+    if response.status_code != 200:
+        return None
+    try:
+        result = response.json().get("result", [])
+        if result and isinstance(result, list):
+            return result[0]  # Берем первого пользователя из списка
+    except Exception:
+        return None
+
 # Экспорт чата в JSON формате
-def export_chat(chat_id, chat_name, messages):
+def export_chat(chat_id, chat_name, messages, author_info_map):
     export = {
         "chat_id": chat_id,
         "chat_name": chat_name,
         "messages": []
     }
     for msg in messages:
+        author_id = msg.get("author_id")
+        author_info = author_info_map.get(author_id, {"full_name": "Неизвестный пользователь", "work_position": ""})
         export["messages"].append({
             "id": msg.get("id"),
             "timestamp": msg.get("date"),
-            "author_id": msg.get("author_id"),
+            "author_id": author_id,
+            "author_name": author_info["full_name"],
+            "author_position": author_info["work_position"],
             "text": msg.get("text"),
             "params": msg.get("params", {})
         })
@@ -93,7 +111,7 @@ def filter_messages_by_date(messages, start_date, end_date):
     return filtered
 
 # Основной интерфейс приложения
-st.title("Экспорт истории чатов из Bitrix24")
+st.title("Экспорт истории чатов из Bitrix24 с ФИО пользователей")
 
 # Загружаем чаты
 chats = get_recent_chats()
@@ -139,20 +157,43 @@ if selected_chat_title:
 
         st.success(f"Сообщений после фильтрации: {len(filtered_messages)}")
 
+        # Собираем список всех авторов
+        author_ids = set()
+        for msg in filtered_messages:
+            if "author_id" in msg:
+                author_ids.add(msg["author_id"])
+
+        st.info(f"Получение данных о {len(author_ids)} авторах сообщений...")
+
+        # Получаем данные об авторах
+        author_info_map = {}
+        for author_id in author_ids:
+            user_info = get_user_info(author_id)
+            if user_info:
+                author_info_map[author_id] = {
+                    "full_name": f"{user_info.get('LAST_NAME', '')} {user_info.get('NAME', '')}".strip(),
+                    "work_position": user_info.get('WORK_POSITION', '')
+                }
+            else:
+                author_info_map[author_id] = {
+                    "full_name": "Неизвестный пользователь",
+                    "work_position": ""
+                }
+
         # Отладочная информация
         st.subheader("Первые 2 сообщения после фильтрации:")
         st.json(filtered_messages[:2])
 
         # Формируем JSON файл
-        export_data = export_chat(selected_chat_id, selected_chat_title, filtered_messages)
+        export_data = export_chat(selected_chat_id, selected_chat_title, filtered_messages, author_info_map)
 
         buffer = io.BytesIO()
         buffer.write(json.dumps(export_data, ensure_ascii=False, indent=2).encode("utf-8"))
         buffer.seek(0)
 
         st.download_button(
-            "Скачать историю чата в JSON",
+            "Скачать историю чата в JSON (с ФИО)",
             buffer,
-            file_name=f"chat_{selected_chat_id}_history.json",
+            file_name=f"chat_{selected_chat_id}_history_with_users.json",
             mime="application/json"
         )
