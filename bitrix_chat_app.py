@@ -3,7 +3,7 @@ import requests
 import json
 import io
 from datetime import datetime, date
-import dateutil.parser  # Для парсинга дат сообщений
+import dateutil.parser
 
 # Читаем WEBHOOK из секрета
 WEBHOOK = st.secrets["WEBHOOK"]
@@ -23,11 +23,12 @@ def get_recent_chats():
         st.error("Ошибка разбора JSON ответа.")
         return []
 
-# Получение истории сообщений для чата
-def get_chat_history(dialog_id, limit=50):
+# Глубокая загрузка всех сообщений для чата
+def get_chat_history(dialog_id, limit=50, max_messages=5000):
     all_messages = []
     seen_ids = set()
     last_id = 0
+    count = 0
 
     while True:
         params = {
@@ -58,9 +59,14 @@ def get_chat_history(dialog_id, limit=50):
         seen_ids.update(msg["id"] for msg in new_messages)
         last_id = min(msg["id"] for msg in new_messages if "id" in msg)
 
+        count += len(new_messages)
+        if count >= max_messages:
+            st.warning(f"Загружено {max_messages} сообщений. Дальнейшая загрузка остановлена.")
+            break
+
     return all_messages
 
-# Получение информации о пользователе по его ID
+# Получение информации о пользователе
 def get_user_info(user_id):
     url = f"{WEBHOOK}/user.get"
     params = {"ID": user_id}
@@ -70,11 +76,11 @@ def get_user_info(user_id):
     try:
         result = response.json().get("result", [])
         if result and isinstance(result, list):
-            return result[0]  # Берем первого пользователя из списка
+            return result[0]
     except Exception:
         return None
 
-# Экспорт чата в JSON формате
+# Экспорт чата в JSON
 def export_chat(chat_id, chat_name, messages, author_info_map):
     export = {
         "chat_id": chat_id,
@@ -110,62 +116,80 @@ def filter_messages_by_date(messages, start_date, end_date):
             filtered.append(msg)
     return filtered
 
-# Основной интерфейс приложения
-st.title("Экспорт истории чатов из Bitrix24 с ФИО пользователей")
+# Основной интерфейс
+st.title("Экспорт истории чатов Bitrix24 с автоподбором даты и ФИО пользователей")
 
-# Загружаем чаты
+# Загружаем список чатов
 chats = get_recent_chats()
 
-# Отладочный вывод всех чатов
 st.subheader("Отладка: данные, полученные от Bitrix24")
 st.json(chats)
 
 if not chats:
-    st.error("Не удалось получить список чатов. Проверьте настройки вебхука.")
+    st.error("Не удалось получить список чатов.")
     st.stop()
 
-# Формируем карту для выбора
 chat_map = {f'{chat.get("title", "Без названия")} (ID: {chat.get("chat_id", "нет id")})': chat["chat_id"] for chat in chats if "chat_id" in chat}
 
 if not chat_map:
-    st.error("Нет доступных чатов для экспорта.")
+    st.error("Нет доступных чатов.")
     st.stop()
 
-# Выбор чата пользователем
 selected_chat_title = st.selectbox("Выберите чат для экспорта:", list(chat_map.keys()))
 
 if selected_chat_title:
     selected_chat_id = chat_map[selected_chat_title]
+    dialog_id = f"chat{selected_chat_id}"
 
-    st.subheader("Фильтр по дате сообщений")
-
-    # Выбор диапазона дат
-    start_date = st.date_input("Начальная дата", value=date.today().replace(day=1))
-    end_date = st.date_input("Конечная дата", value=date.today())
-
-    if start_date > end_date:
-        st.error("Начальная дата должна быть раньше конечной даты!")
-        st.stop()
-
-    if st.button("Выгрузить сообщения"):
+    if st.button("Загрузить все сообщения из чата"):
         st.info("Загружаем сообщения...")
-        dialog_id = f"chat{selected_chat_id}"
         all_messages = get_chat_history(dialog_id)
 
-        # Фильтрация сообщений по дате
+        if not all_messages:
+            st.error("Сообщений в чате нет.")
+            st.stop()
+
+        # Автоподбор диапазона дат
+        all_dates = []
+        for msg in all_messages:
+            msg_date_str = msg.get("date")
+            if msg_date_str:
+                try:
+                    msg_datetime = dateutil.parser.isoparse(msg_date_str)
+                    all_dates.append(msg_datetime.date())
+                except Exception:
+                    continue
+
+        if not all_dates:
+            st.error("Не удалось определить даты сообщений.")
+            st.stop()
+
+        min_date = min(all_dates)
+        max_date = max(all_dates)
+
+        st.success(f"Сообщения в чате с {min_date} по {max_date}")
+
+        # Выбор диапазона пользователем
+        start_date = st.date_input("Начальная дата", value=min_date, min_value=min_date, max_value=max_date)
+        end_date = st.date_input("Конечная дата", value=max_date, min_value=min_date, max_value=max_date)
+
+        if start_date > end_date:
+            st.error("Начальная дата должна быть раньше конечной даты!")
+            st.stop()
+
+        # Фильтрация сообщений
         filtered_messages = filter_messages_by_date(all_messages, start_date, end_date)
 
         st.success(f"Сообщений после фильтрации: {len(filtered_messages)}")
 
-        # Собираем список всех авторов
-        author_ids = set()
-        for msg in filtered_messages:
-            if "author_id" in msg:
-                author_ids.add(msg["author_id"])
+        if not filtered_messages:
+            st.warning("Нет сообщений в выбранном диапазоне дат.")
+            st.stop()
 
-        st.info(f"Получение данных о {len(author_ids)} авторах сообщений...")
+        # Получение данных об авторах
+        author_ids = {msg["author_id"] for msg in filtered_messages if "author_id" in msg}
+        st.info(f"Получение данных о {len(author_ids)} авторах...")
 
-        # Получаем данные об авторах
         author_info_map = {}
         for author_id in author_ids:
             user_info = get_user_info(author_id)
@@ -180,11 +204,10 @@ if selected_chat_title:
                     "work_position": ""
                 }
 
-        # Отладочная информация
         st.subheader("Первые 2 сообщения после фильтрации:")
         st.json(filtered_messages[:2])
 
-        # Формируем JSON файл
+        # Экспорт в JSON
         export_data = export_chat(selected_chat_id, selected_chat_title, filtered_messages, author_info_map)
 
         buffer = io.BytesIO()
@@ -192,7 +215,7 @@ if selected_chat_title:
         buffer.seek(0)
 
         st.download_button(
-            "Скачать историю чата в JSON (с ФИО)",
+            "Скачать историю чата в JSON (с ФИО и фильтрацией)",
             buffer,
             file_name=f"chat_{selected_chat_id}_history_with_users.json",
             mime="application/json"
