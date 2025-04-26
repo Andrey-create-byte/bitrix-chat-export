@@ -1,4 +1,3 @@
-
 import requests
 import json
 import os
@@ -10,7 +9,7 @@ from datetime import datetime
 # Чтение секрета из Streamlit secrets
 WEBHOOK_URL = st.secrets["WEBHOOK_URL"]
 
-# Получение сообщений из чата
+# Функция для получения сообщений из чата
 def get_chat_messages(dialog_id, limit=200, offset=0):
     url = f"{WEBHOOK_URL}im.dialog.messages.get.json"
     payload = {
@@ -21,7 +20,7 @@ def get_chat_messages(dialog_id, limit=200, offset=0):
     response = requests.post(url, json=payload)
     return response.json()
 
-# Получение списка последних чатов
+# Функция для получения списка последних чатов
 def get_recent_chats():
     url = f"{WEBHOOK_URL}im.recent.get.json"
     response = requests.get(url)
@@ -85,9 +84,19 @@ if __name__ == "__main__":
     chats_list = []
     if 'result' in recent_chats_response:
         for chat in recent_chats_response['result']:
-            dialog_id = chat.get('DIALOG_ID', '')
+            if chat.get('CHAT_TYPE') == 'chat':
+                dialog_id = f"chat{chat.get('CHAT_ID')}"
+            elif chat.get('CHAT_TYPE') == 'openline':
+                dialog_id = f"lines{chat.get('CHAT_ID')}"
+            elif chat.get('CHAT_TYPE') == 'user':
+                dialog_id = f"user{chat.get('ID')}"
+            else:
+                dialog_id = ''
+
             title = chat.get('TITLE', '') or chat.get('NAME', '') or dialog_id
-            chats_list.append((title, dialog_id))
+
+            if dialog_id:
+                chats_list.append((title, dialog_id))
 
     chats_list = sorted(chats_list)
 
