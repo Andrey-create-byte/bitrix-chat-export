@@ -63,7 +63,7 @@ def load_full_history(dialog_id, max_messages=5000):
 
         last_id = min([msg["id"] for msg in messages if "id" in msg])
         loaded += len(messages)
-        time.sleep(0.2)  # Пауза, чтобы не перебивать API
+        time.sleep(0.2)
 
     return all_messages
 
@@ -82,9 +82,9 @@ def filter_messages_by_date(messages, start_date, end_date):
     return filtered
 
 # === Интерфейс Streamlit ===
-st.title("Bitrix24: Полная выгрузка чата с выбором даты")
+st.title("Bitrix24: Полная выгрузка чата по датам")
 
-# 1. Загрузка чатов
+# 1. Выбор чата
 chats = get_recent_chats()
 if not chats:
     st.stop()
@@ -96,10 +96,21 @@ if selected_chat_title:
     selected_chat_id = chat_map[selected_chat_title]
     dialog_id = f"chat{selected_chat_id}"
 
-    max_messages = st.slider("Максимальное количество сообщений для выгрузки", 100, 10000, step=100, value=1000)
+    # 2. Выбор периода дат
+    today = date.today()
+    start_date = st.date_input("Начальная дата", value=today.replace(day=1))
+    end_date = st.date_input("Конечная дата", value=today)
 
+    if start_date > end_date:
+        st.error("Начальная дата должна быть раньше конечной даты.")
+        st.stop()
+
+    # 3. Выбор лимита сообщений
+    max_messages = st.slider("Максимальное количество сообщений для загрузки", 100, 10000, step=100, value=1000)
+
+    # 4. Кнопка загрузки
     if st.button("Загрузить историю чата"):
-        st.info("Загружаем все сообщения...")
+        st.info("Загружаем сообщения...")
         all_messages = load_full_history(dialog_id, max_messages=max_messages)
 
         if not all_messages:
@@ -108,39 +119,18 @@ if selected_chat_title:
 
         st.success(f"Загружено сообщений: {len(all_messages)}")
 
-        all_dates = []
-        for msg in all_messages:
-            if "date" in msg:
-                try:
-                    msg_datetime = dateutil.parser.isoparse(msg["date"])
-                    all_dates.append(msg_datetime.date())
-                except Exception:
-                    continue
+        # Фильтрация по выбранному диапазону дат
+        filtered_messages = filter_messages_by_date(all_messages, start_date, end_date)
 
-        if all_dates:
-            min_date = min(all_dates)
-            max_date = max(all_dates)
+        st.success(f"Сообщений в выбранном диапазоне: {len(filtered_messages)}")
 
-            st.success(f"Диапазон дат в чате: {min_date} — {max_date}")
+        buffer = io.BytesIO()
+        buffer.write(json.dumps(filtered_messages, ensure_ascii=False, indent=2).encode("utf-8"))
+        buffer.seek(0)
 
-            start_date = st.date_input("Начальная дата фильтрации", value=min_date, min_value=min_date, max_value=max_date)
-            end_date = st.date_input("Конечная дата фильтрации", value=max_date, min_value=min_date, max_value=max_date)
-
-            if start_date > end_date:
-                st.error("Начальная дата должна быть раньше конечной.")
-                st.stop()
-
-            filtered_messages = filter_messages_by_date(all_messages, start_date, end_date)
-
-            st.success(f"Сообщений после фильтрации: {len(filtered_messages)}")
-
-            buffer = io.BytesIO()
-            buffer.write(json.dumps(filtered_messages, ensure_ascii=False, indent=2).encode("utf-8"))
-            buffer.seek(0)
-
-            st.download_button(
-                "Скачать отфильтрованную переписку",
-                buffer,
-                file_name=f"chat_{selected_chat_id}_export_{start_date}_to_{end_date}.json",
-                mime="application/json"
-            )
+        st.download_button(
+            "Скачать переписку",
+            buffer,
+            file_name=f"chat_{selected_chat_id}_export_{start_date}_to_{end_date}.json",
+            mime="application/json"
+        )
