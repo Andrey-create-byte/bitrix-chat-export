@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import json
 import io
-from datetime import datetime
 
 # Читаем WEBHOOK из секрета
 WEBHOOK = st.secrets["WEBHOOK"]
@@ -11,7 +10,7 @@ WEBHOOK = st.secrets["WEBHOOK"]
 def get_recent_chats():
     url = f"{WEBHOOK}/im.recent.get"
     response = requests.get(url)
-    st.write("Статус ответа:", response.status_code)  # Показываем статус запроса
+    st.write("Статус ответа:", response.status_code)
     if response.status_code != 200:
         st.error(f"Ошибка ответа сервера: {response.text}")
         return []
@@ -23,14 +22,14 @@ def get_recent_chats():
         return []
 
 # Получение истории сообщений для чата
-def get_chat_history(chat_id, limit=50):
+def get_chat_history(dialog_id, limit=50):
     all_messages = []
     seen_ids = set()
     last_id = 0
 
     while True:
         params = {
-            "DIALOG_ID": f"chat{chat_id}",
+            "DIALOG_ID": dialog_id,
             "LIMIT": limit
         }
         if last_id:
@@ -90,8 +89,8 @@ if not chats:
     st.error("Не удалось получить список чатов. Проверьте настройки вебхука.")
     st.stop()
 
-# Формируем карту для выбора (показываем все чаты, не только групповые)
-chat_map = {f'{chat.get("TITLE", "Без названия")} (ID: {chat.get("CHAT_ID", "неизвестно")})': chat["CHAT_ID"] for chat in chats if "CHAT_ID" in chat}
+# Формируем карту для выбора
+chat_map = {f'{chat.get("title", "Без названия")} (ID: {chat.get("chat_id", "нет id")})': chat["chat_id"] for chat in chats if "chat_id" in chat}
 
 if not chat_map:
     st.error("Нет доступных чатов для экспорта.")
@@ -105,11 +104,12 @@ if selected_chat_title:
 
     if st.button("Выгрузить все сообщения"):
         st.info("Загружаем сообщения...")
-        all_messages = get_chat_history(selected_chat_id)
+        dialog_id = f"chat{selected_chat_id}"  # правильно формируем диалог
+        all_messages = get_chat_history(dialog_id)
 
         st.success(f"Загрузка завершена. Всего сообщений: {len(all_messages)}")
 
-        # Отладочная информация: показываем несколько сообщений
+        # Отладочная информация
         st.subheader("Первые 2 сообщения для проверки:")
         st.json(all_messages[:2])
 
