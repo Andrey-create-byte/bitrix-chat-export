@@ -3,8 +3,6 @@ import requests
 import json
 import io
 from datetime import datetime
-from zipfile import ZipFile
-import os
 
 WEBHOOK = st.secrets["WEBHOOK"]
 
@@ -73,13 +71,17 @@ def export_chat(chat_id, chat_name, messages):
     return export
 
 # Основное приложение
-st.title("Экспорт чатов из Bitrix24")
+st.title("Экспорт истории чатов из Bitrix24")
 
 # Получаем список чатов
 chats = get_recent_chats()
-group_chats = [chat for chat in chats if chat.get("type") == "chat"]
+group_chats = [chat for chat in chats if chat.get("CHAT_TYPE") == "chat"]
 
-chat_map = {f'{chat.get(\"title\", \"Без названия\")} (ID: {chat[\"chat_id\"]})': chat["chat_id"] for chat in group_chats}
+if not group_chats:
+    st.error("Нет доступных групповых чатов для экспорта.")
+    st.stop()
+
+chat_map = {f'{chat.get("TITLE", "Без названия")} (ID: {chat["CHAT_ID"]})': chat["CHAT_ID"] for chat in group_chats}
 selected_chat_title = st.selectbox("Выберите чат:", list(chat_map.keys()))
 
 if selected_chat_title:
